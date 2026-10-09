@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { useEffect, useState } from 'react';
 import { UserRole } from './types';
+import { apiClient } from './api-client';
 
 export interface StaffSession {
   id: string;
@@ -12,6 +13,7 @@ export interface StaffSession {
   role: UserRole;
   branchId: string;
   branchName: string;
+  token?: string;
 }
 
 export const DEMO_STAFF_ACCOUNTS: Array<{
@@ -62,38 +64,84 @@ export const DEMO_STAFF_ACCOUNTS: Array<{
 
 interface AuthState {
   session: StaffSession | null;
+  token: string | null;
   hasHydrated: boolean;
-  login: (staffData: StaffSession) => void;
+  login: (staffData: StaffSession, token?: string) => void;
+  loginWithApi: (usernameOrEmail: string, password: string, branchNameFallback?: string) => Promise<StaffSession>;
   logout: () => void;
   setHydrated: (value: boolean) => void;
 }
 
 const AUTH_STORAGE_KEY = 'pos_kds_staff_session_v3';
+const TOKEN_STORAGE_KEY = 'pos_kds_access_token';
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
       session: null,
+      token: null,
       hasHydrated: false,
-      login: (staffData: StaffSession) => {
-        set({ session: staffData, hasHydrated: true });
+      login: (staffData: StaffSession, token?: string) => {
+        const authToken = token || staffData.token || null;
+        if (typeof window !== 'undefined' && authToken) {
+          try {
+            localStorage.setItem(TOKEN_STORAGE_KEY, authToken);
+          } catch {}
+        }
+        set({ session: { ...staffData, token: authToken || undefined }, token: authToken, hasHydrated: true });
         if (typeof window !== 'undefined') {
           try {
             window.dispatchEvent(new Event('auth-session-updated'));
-          } catch {
-            // ignore
-          }
+          } catch {}
         }
       },
+      loginWithApi: async (usernameOrEmail: string, password: string, branchNameFallback = 'Chi nhánh 1 - Quận 1, TP.HCM') => {
+        const res = await apiClient.post('/auth/login', {
+          username: usernameOrEmail,
+          password,
+        });
+
+        const authData = res.data;
+        const accessToken = authData.accessToken;
+        const user = authData.user;
+
+        // Map role backend (IN HOA) sang UserRole frontend (thường)
+        const role = user.role.toLowerCase() as UserRole;
+
+        const sessionData: StaffSession = {
+          id: user.id,
+          name: user.fullName || user.username,
+          email: user.email || `${user.username}@smartpos.vn`,
+          role,
+          branchId: user.branchId || 'branch-1',
+          branchName: user.branch?.name || branchNameFallback,
+          token: accessToken,
+        };
+
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
+          } catch {}
+        }
+
+        set({ session: sessionData, token: accessToken, hasHydrated: true });
+
+        if (typeof window !== 'undefined') {
+          try {
+            window.dispatchEvent(new Event('auth-session-updated'));
+          } catch {}
+        }
+
+        return sessionData;
+      },
       logout: () => {
-        set({ session: null, hasHydrated: true });
+        set({ session: null, token: null, hasHydrated: true });
         if (typeof window !== 'undefined') {
           try {
             localStorage.removeItem(AUTH_STORAGE_KEY);
+            localStorage.removeItem(TOKEN_STORAGE_KEY);
             window.dispatchEvent(new Event('auth-session-updated'));
-          } catch {
-            // ignore
-          }
+          } catch {}
         }
       },
       setHydrated: (value: boolean) => set({ hasHydrated: value }),
@@ -110,11 +158,6 @@ export const useAuthStore = create<AuthState>()(
   )
 );
 
-/**
- * Hook an toàn cho Client Components trong Next.js:
- * Chỉ đánh dấu isReady khi client đã mount và state đã rehydrate từ localStorage,
- * giúp phân quyền đăng nhập Thu Ngân / Bếp / Admin hoạt động ổn định.
- */
 export function useCurrentAuth() {
   const store = useAuthStore();
   const [isReady, setIsReady] = useState(false);
@@ -125,9 +168,11 @@ export function useCurrentAuth() {
 
   return {
     session: store.session,
+    token: store.token,
     isAuthenticated: !!store.session,
     isReady: isReady && store.hasHydrated,
     login: store.login,
+    loginWithApi: store.loginWithApi,
     logout: store.logout,
   };
 }

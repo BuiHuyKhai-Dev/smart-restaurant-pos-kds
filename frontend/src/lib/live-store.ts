@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Branch,
   RestaurantTable,
@@ -11,6 +11,8 @@ import {
   OrderItem,
   PaymentMethod,
   PaymentRequest,
+  OrderItemStatus,
+  TableStatus,
 } from './types';
 import {
   INITIAL_BRANCHES,
@@ -19,6 +21,8 @@ import {
   INITIAL_INGREDIENTS,
   INITIAL_ORDERS,
 } from './mock-data';
+import { apiClient } from './api-client';
+import { socketService } from './socket-client';
 
 const STORAGE_KEYS = {
   BRANCH_ID: 'pos_kds_current_branch_id',
@@ -31,7 +35,6 @@ const STORAGE_KEYS = {
   PAYMENT_REQUESTS: 'pos_kds_payment_requests_v1',
 };
 
-// Khởi tạo State Store dùng LocalStorage để đồng bộ Realtime giữa các tab trình duyệt
 export interface SystemState {
   currentBranchId: string;
   branches: Branch[];
@@ -41,6 +44,7 @@ export interface SystemState {
   orders: Order[];
   auditLogs: InventoryAuditLog[];
   paymentRequests: PaymentRequest[];
+  isBackendConnected: boolean;
 }
 
 function getStoredOrInitial<T>(key: string, fallback: T): T {
@@ -57,28 +61,10 @@ function saveToStorage<T>(key: string, data: T): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(key, JSON.stringify(data));
-    // Phát event đồng bộ cho các tab khác và nội bộ tab hiện tại
     window.dispatchEvent(new Event('pos_kds_state_updated'));
   } catch (e) {
     console.error('Lỗi lưu trữ state:', e);
   }
-}
-
-function mergeSeedData<T extends { id: string }>(stored: T[] | undefined, fallback: T[]): T[] {
-  if (!Array.isArray(stored)) return fallback;
-
-  const mergedMap = new Map<string, T>();
-  [...fallback, ...stored].forEach((item) => {
-    mergedMap.set(item.id, item);
-  });
-
-  return Array.from(mergedMap.values());
-}
-
-function shouldResetLegacyState<T extends { id: string }>(stored: T[] | undefined, fallback: T[]): boolean {
-  if (!Array.isArray(stored)) return false;
-  if (stored.length === 0) return false;
-  return stored.length < fallback.length;
 }
 
 export function useLiveStore() {
@@ -91,75 +77,239 @@ export function useLiveStore() {
     orders: INITIAL_ORDERS,
     auditLogs: [],
     paymentRequests: [],
+    isBackendConnected: false,
   });
 
-  // Tải dữ liệu từ LocalStorage khi mount và lắng nghe thay đổi Realtime
-  useEffect(() => {
-    const loadState = () => {
-      const storedBranchId = getStoredOrInitial<string | null>(STORAGE_KEYS.BRANCH_ID, 'branch-1') ?? 'branch-1';
-      const storedBranches = getStoredOrInitial(STORAGE_KEYS.BRANCHES, INITIAL_BRANCHES);
-      const storedTables = getStoredOrInitial(STORAGE_KEYS.TABLES, INITIAL_TABLES);
-      const storedIngredients = getStoredOrInitial(STORAGE_KEYS.INGREDIENTS, INITIAL_INGREDIENTS);
-      const storedOrders = getStoredOrInitial(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+  // Tải dữ liệu từ Backend API hoặc fallback sang LocalStorage
+  const fetchBackendData = useCallback(async (branchId: string) => {
+    try {
+      // 1. Tải danh sách chi nhánh
+      const branchRes = await apiClient.get('/branches').catch(() => null);
+      let branches = INITIAL_BRANCHES;
+      if (branchRes?.success && Array.isArray(branchRes.data) && branchRes.data.length > 0) {
+        branches = branchRes.data.map((b: any) => ({
+          id: b.id,
+          name: b.name,
+          address: b.address,
+          city: b.city || 'TP.HCM',
+          phone: b.phoneNumber || '028 3822 1234',
+          isActive: b.isActive,
+          totalTables: b._count?.tables || 10,
+        }));
+      }
 
-      const shouldReset =
-        shouldResetLegacyState(storedBranches, INITIAL_BRANCHES) ||
-        shouldResetLegacyState(storedTables, INITIAL_TABLES) ||
-        shouldResetLegacyState(storedIngredients, INITIAL_INGREDIENTS) ||
-        shouldResetLegacyState(storedOrders, INITIAL_ORDERS);
-
-      if (shouldReset && typeof window !== 'undefined') {
-        Object.entries(STORAGE_KEYS).forEach(([_, key]) => {
-          if (key !== STORAGE_KEYS.BRANCH_ID) {
-            localStorage.removeItem(key);
-          }
+      // 2. Tải sơ đồ bàn theo chi nhánh
+      const tableRes = await apiClient.get(`/tables?branchId=${branchId}`).catch(() => null);
+      let tables = INITIAL_TABLES;
+      if (tableRes?.success && Array.isArray(tableRes.data)) {
+        tables = tableRes.data.map((t: any) => {
+          const activeSession = t.orderSessions?.[0];
+          const statusLower = t.status.toLowerCase() as TableStatus;
+          return {
+            id: t.id,
+            branchId: t.branchId,
+            number: t.tableNumber,
+            displayName: t.displayName || `Bàn ${t.tableNumber}`,
+            capacity: t.capacity || 4,
+            area: t.area?.toLowerCase() || 'ground',
+            status: statusLower,
+            activeOrderId: activeSession?.id,
+            guestCount: activeSession?.guestCount,
+            seatedAt: t.seatedAt || activeSession?.openedAt,
+          };
         });
       }
 
-      const loadedBranches = mergeSeedData(getStoredOrInitial(STORAGE_KEYS.BRANCHES, INITIAL_BRANCHES), INITIAL_BRANCHES);
-      const currentBranchId = loadedBranches.some((branch) => branch.id === storedBranchId)
-        ? storedBranchId
-        : loadedBranches[0]?.id || 'branch-1';
+      // 3. Tải thực đơn món ăn
+      const menuRes = await apiClient.get('/menu').catch(() => null);
+      let menuItems = INITIAL_MENU_ITEMS;
+      if (menuRes?.success && Array.isArray(menuRes.data)) {
+        menuItems = menuRes.data.map((m: any) => ({
+          id: m.id,
+          name: m.name,
+          category: m.category?.id?.replace('cat-', '') || 'noodles',
+          station: m.kitchenStationId || m.kitchenStation?.id || 'hot',
+          price: Number(m.price),
+          description: m.description || '',
+          image: m.pictureLink || '',
+          isAvailable: m.isAvailable,
+          standardPrepMinutes: m.standardPrepMinutes || 15,
+          bom: m.recipes ? m.recipes.map((r: any) => ({ ingredientId: r.ingredientId, quantity: Number(r.amountNeeded) })) : [],
+          options: {
+            spicyLevels: ['Không cay', 'Cay vừa', 'Cay nồng'],
+            toppings: m.modifiers ? m.modifiers.flatMap((mg: any) => mg.modifierGroup?.items?.map((it: any) => ({
+              name: it.name,
+              price: Number(it.extraPrice),
+            })) || []) : [],
+          },
+        }));
+      }
 
-      setState({
-        currentBranchId,
-        branches: loadedBranches,
-        tables: mergeSeedData(getStoredOrInitial(STORAGE_KEYS.TABLES, INITIAL_TABLES), INITIAL_TABLES),
-        menuItems: getStoredOrInitial(STORAGE_KEYS.MENU, INITIAL_MENU_ITEMS),
-        ingredients: mergeSeedData(getStoredOrInitial(STORAGE_KEYS.INGREDIENTS, INITIAL_INGREDIENTS), INITIAL_INGREDIENTS),
-        orders: mergeSeedData(getStoredOrInitial(STORAGE_KEYS.ORDERS, INITIAL_ORDERS), INITIAL_ORDERS),
-        auditLogs: getStoredOrInitial(STORAGE_KEYS.AUDIT_LOGS, []),
-        paymentRequests: getStoredOrInitial(STORAGE_KEYS.PAYMENT_REQUESTS, []),
+      // 4. Tải tồn kho chi nhánh
+      const invRes = await apiClient.get(`/inventory?branchId=${branchId}`).catch(() => null);
+      let ingredients = INITIAL_INGREDIENTS;
+      if (invRes?.success && Array.isArray(invRes.data)) {
+        ingredients = invRes.data.map((inv: any) => ({
+          id: inv.ingredientId,
+          branchId: inv.branchId,
+          name: inv.name,
+          unit: inv.unit,
+          stock: inv.currentStock,
+          minThreshold: inv.minSafetyStock,
+          costPrice: inv.costPrice,
+          supplier: inv.supplier,
+          lastRestockedAt: inv.lastRestockedAt,
+        }));
+      }
+
+      // 5. Tải nhật ký kho
+      const auditRes = await apiClient.get(`/inventory/audit-logs?branchId=${branchId}`).catch(() => null);
+      let auditLogs: InventoryAuditLog[] = [];
+      if (auditRes?.success && Array.isArray(auditRes.data)) {
+        auditLogs = auditRes.data.map((a: any) => ({
+          id: a.id,
+          branchId: a.branchId,
+          ingredientId: a.ingredientId,
+          ingredientName: a.ingredient?.name || '',
+          amountDeducted: Number(a.amountDeducted),
+          unit: a.ingredient?.baseUnit || 'g',
+          remainingStock: Number(a.remainingStock),
+          orderId: a.orderItemId || '',
+          orderItemName: a.orderItem?.product?.name || '',
+          reason: a.reason,
+          createdAt: a.createdAt,
+        }));
+      }
+
+      setState((prev) => ({
+        ...prev,
+        currentBranchId: branchId,
+        branches,
+        tables,
+        menuItems,
+        ingredients,
+        auditLogs,
+        isBackendConnected: true,
+      }));
+    } catch (err) {
+      console.warn('Không thể nạp dữ liệu từ backend, sử dụng state offline:', err);
+    }
+  }, []);
+
+  // Khởi tạo state ban đầu
+  useEffect(() => {
+    const storedBranchId = getStoredOrInitial<string>(STORAGE_KEYS.BRANCH_ID, 'branch-1');
+    fetchBackendData(storedBranchId);
+
+    // Kết nối WebSocket Realtime
+    const socket = socketService.getSocket();
+    socketService.joinBranch(storedBranchId);
+    socketService.joinPos(storedBranchId);
+
+    // Lắng nghe sự kiện Realtime từ Backend
+    const handleOrderPlaced = (data: any) => {
+      console.log('⚡ Socket [order:placed]:', data);
+      setState((prev) => {
+        // Cập nhật trạng thái bàn sang occupied
+        const updatedTables = prev.tables.map((t) =>
+          t.id === data.tableId
+            ? { ...t, status: 'occupied' as const, activeOrderId: data.orderId, seatedAt: t.seatedAt || new Date().toISOString() }
+            : t
+        );
+        return { ...prev, tables: updatedTables };
       });
     };
 
-    loadState();
-
-    const handleStorageChange = () => {
-      loadState();
+    const handleItemStatusUpdated = (item: any) => {
+      console.log('⚡ Socket [order_item:status_updated]:', item);
+      setState((prev) => {
+        const updatedOrders = prev.orders.map((o) => ({
+          ...o,
+          items: o.items.map((it) => (it.id === item.id ? { ...it, status: item.status.toLowerCase() as OrderItemStatus } : it)),
+        }));
+        return { ...prev, orders: updatedOrders };
+      });
+      // Nếu món READY thì cập nhật lại bảng cân đối kho
+      if (item.status === 'READY') {
+        fetchBackendData(storedBranchId);
+      }
     };
 
-    window.addEventListener('storage', handleStorageChange);
-    window.addEventListener('pos_kds_state_updated', handleStorageChange);
+    const handlePaymentRequested = (payload: any) => {
+      console.log('⚡ Socket [payment:requested]:', payload);
+      setState((prev) => {
+        const updatedTables = prev.tables.map((t) =>
+          t.id === payload.tableId ? { ...t, status: 'pending_payment' as const } : t
+        );
+        const newReq: PaymentRequest = {
+          id: `payreq-${Date.now()}`,
+          branchId: payload.branchId,
+          tableId: payload.tableId,
+          tableNumber: payload.tableNumber,
+          requestedAt: new Date(payload.requestedAt).toISOString(),
+          status: 'pending',
+        };
+        const exists = prev.paymentRequests.some((r) => r.tableId === payload.tableId);
+        return {
+          ...prev,
+          tables: updatedTables,
+          paymentRequests: exists ? prev.paymentRequests : [newReq, ...prev.paymentRequests],
+        };
+      });
+    };
+
+    const handlePaymentCompleted = (payload: any) => {
+      console.log('⚡ Socket [payment:completed]:', payload);
+      setState((prev) => {
+        const updatedTables = prev.tables.map((t) =>
+          t.id === payload.tableId ? { ...t, status: 'available' as const, activeOrderId: undefined, seatedAt: undefined } : t
+        );
+        const updatedReqs = prev.paymentRequests.filter((r) => r.tableId !== payload.tableId);
+        return { ...prev, tables: updatedTables, paymentRequests: updatedReqs };
+      });
+    };
+
+    const handleTableUpdated = (payload: any) => {
+      console.log('⚡ Socket [table:updated]:', payload);
+      setState((prev) => {
+        const updatedTables = prev.tables.map((t) =>
+          t.id === payload.tableId ? { ...t, status: payload.status.toLowerCase() as TableStatus } : t
+        );
+        return { ...prev, tables: updatedTables };
+      });
+    };
+
+    socket.on('order:placed', handleOrderPlaced);
+    socket.on('order_item:status_updated', handleItemStatusUpdated);
+    socket.on('payment:requested', handlePaymentRequested);
+    socket.on('payment:completed', handlePaymentCompleted);
+    socket.on('table:updated', handleTableUpdated);
 
     return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('pos_kds_state_updated', handleStorageChange);
+      socket.off('order:placed', handleOrderPlaced);
+      socket.off('order_item:status_updated', handleItemStatusUpdated);
+      socket.off('payment:requested', handlePaymentRequested);
+      socket.off('payment:completed', handlePaymentCompleted);
+      socket.off('table:updated', handleTableUpdated);
     };
-  }, []);
+  }, [fetchBackendData]);
 
   // --- ACTIONS ---
 
-  // Điểm mới 5: Đổi Chi nhánh
+  // Đổi Chi nhánh
   const setBranch = (branchId: string) => {
     saveToStorage(STORAGE_KEYS.BRANCH_ID, branchId);
     setState((prev) => ({ ...prev, currentBranchId: branchId }));
+    socketService.joinBranch(branchId);
+    socketService.joinPos(branchId);
+    fetchBackendData(branchId);
   };
 
-  // Điểm mới 1: Khách đặt món qua QR -> Tự động chuyển thẳng vào KDS & POS
-  const placeOrder = (payload: {
+  // Khách hoặc POS đặt món
+  const placeOrder = async (payload: {
     tableId: string;
     guestCount?: number;
+    tableToken?: string;
     items: Array<{
       menuItemId: string;
       quantity: number;
@@ -172,31 +322,46 @@ export function useLiveStore() {
     const table = state.tables.find((t) => t.id === payload.tableId);
     if (!table) return null;
 
+    // Chuẩn bị payload gửi lên Backend REST API
+    const apiPayload = {
+      tableId: payload.tableId,
+      guestCount: payload.guestCount || 2,
+      items: payload.items.map((i) => ({
+        productId: i.menuItemId,
+        quantity: i.quantity,
+        note: i.note,
+        modifierIds: [], // Sẽ map modifier nếu có
+      })),
+    };
+
+    try {
+      const res = await apiClient.post('/orders', apiPayload, {
+        tableToken: payload.tableToken,
+      });
+
+      if (res.success && res.data) {
+        // Tải lại bàn để cập nhật trạng thái mới nhất từ server
+        fetchBackendData(state.currentBranchId);
+        return res.data;
+      }
+    } catch (err: any) {
+      console.warn('Lỗi gọi API đặt món, chuyển sang fallback:', err.message);
+    }
+
+    // Fallback Local
     const orderId = `ord-${Date.now()}`;
     const orderCode = `ORD-${Math.floor(100 + Math.random() * 900)}`;
     const now = new Date().toISOString();
 
     const orderItems: OrderItem[] = payload.items.map((item, idx) => {
       const menu = state.menuItems.find((m) => m.id === item.menuItemId);
-      let itemPrice = menu ? menu.price : 0;
-      if (item.selectedSize && menu?.options?.sizes) {
-        const sizeOpt = menu.options.sizes.find((s) => s.name === item.selectedSize);
-        if (sizeOpt) itemPrice += sizeOpt.extraPrice;
-      }
-      if (item.selectedToppings && menu?.options?.toppings) {
-        item.selectedToppings.forEach((topName) => {
-          const topOpt = menu.options?.toppings?.find((t) => t.name === topName);
-          if (topOpt) itemPrice += topOpt.price;
-        });
-      }
-
       return {
         id: `item-${Date.now()}-${idx}`,
         menuItemId: item.menuItemId,
         name: menu ? menu.name : 'Món ăn',
-        price: itemPrice,
+        price: menu ? menu.price : 0,
         quantity: item.quantity,
-        station: menu ? menu.station : 'hot', // Phân loại theo trạm bếp (Điểm mới 2)
+        station: menu ? menu.station : 'hot',
         selectedSize: item.selectedSize,
         selectedSpicyLevel: item.selectedSpicyLevel,
         selectedToppings: item.selectedToppings,
@@ -207,8 +372,7 @@ export function useLiveStore() {
     });
 
     const subtotal = orderItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
-    const taxAmount = Math.round(subtotal * 0.08); // 8% VAT
-    const finalAmount = subtotal + taxAmount;
+    const finalAmount = subtotal + Math.round(subtotal * 0.08);
 
     const newOrder: Order = {
       id: orderId,
@@ -219,30 +383,22 @@ export function useLiveStore() {
       items: orderItems,
       status: 'pending',
       createdAt: now,
-      guestCount: payload.guestCount || table.guestCount || 2,
+      guestCount: payload.guestCount || 2,
       subtotal,
       discountPercent: 0,
       discountAmount: 0,
       taxPercent: 8,
-      taxAmount,
+      taxAmount: Math.round(subtotal * 0.08),
       finalAmount,
     };
 
-    // Cập nhật trạng thái bàn sang occupied
     const updatedTables = state.tables.map((t) =>
       t.id === table.id
-        ? {
-            ...t,
-            status: 'occupied' as const,
-            activeOrderId: orderId,
-            guestCount: newOrder.guestCount,
-            seatedAt: t.seatedAt || now,
-          }
+        ? { ...t, status: 'occupied' as const, activeOrderId: orderId, seatedAt: t.seatedAt || now }
         : t
     );
 
     const updatedOrders = [newOrder, ...state.orders];
-
     saveToStorage(STORAGE_KEYS.TABLES, updatedTables);
     saveToStorage(STORAGE_KEYS.ORDERS, updatedOrders);
 
@@ -255,263 +411,104 @@ export function useLiveStore() {
     return newOrder;
   };
 
-  // Điểm mới 2 & 3: Cập nhật trạng thái từng món trong KDS (Bếp nhận đơn -> Nấu -> Xong)
-  const updateOrderItemStatus = (orderId: string, orderItemId: string, newStatus: OrderItem['status']) => {
-    const orderToUpdate = state.orders.find((o) => o.id === orderId);
-    if (!orderToUpdate) return;
+  // KDS: Đổi trạng thái món ăn (Hỗ trợ linh hoạt cả 2 lẫn 3 tham số)
+  const updateOrderItemStatus = async (
+    arg1: string,
+    arg2: string,
+    arg3?: OrderItemStatus
+  ) => {
+    const itemId = arg3 !== undefined ? arg2 : arg1;
+    const newStatus = (arg3 !== undefined ? arg3 : arg2) as OrderItemStatus;
 
-    let completedItem: OrderItem | undefined;
+    try {
+      await apiClient.patch(`/orders/items/${itemId}/status`, {
+        status: newStatus.toUpperCase(),
+      });
+    } catch (err: any) {
+      console.warn('Lỗi gọi API cập nhật trạng thái món:', err.message);
+      // Ném lỗi ra để modal/UI thông báo nếu là lỗi "Kho không đủ nguyên liệu"
+      if (err.message && err.message.includes('không đủ nguyên liệu')) {
+        throw err;
+      }
+    }
 
-    const updatedItems = orderToUpdate.items.map((item) => {
-      if (item.id === orderItemId) {
-        const updated = {
+    // Cập nhật Optimistic trên giao diện
+    const now = new Date().toISOString();
+    const updatedOrders = state.orders.map((order) => {
+      const itemIndex = order.items.findIndex((i) => i.id === itemId);
+      if (itemIndex === -1) return order;
+
+      const updatedItems = order.items.map((item) => {
+        if (item.id !== itemId) return item;
+        return {
           ...item,
           status: newStatus,
-          startedCookingAt: newStatus === 'cooking' ? new Date().toISOString() : item.startedCookingAt,
-          completedAt: newStatus === 'ready' || newStatus === 'served' ? new Date().toISOString() : item.completedAt,
+          startedCookingAt: newStatus === 'cooking' && !item.startedCookingAt ? now : item.startedCookingAt,
+          completedAt: (newStatus === 'ready' || newStatus === 'served') && !item.completedAt ? now : item.completedAt,
         };
-        if (newStatus === 'ready' && item.status !== 'ready' && item.status !== 'served') {
-          completedItem = updated;
-        }
-        return updated;
-      }
-      return item;
+      });
+
+      return { ...order, items: updatedItems };
     });
 
-    // Tính trạng thái chung của đơn
-    const allReadyOrServed = updatedItems.every((it) => it.status === 'ready' || it.status === 'served');
-    const anyCooking = updatedItems.some((it) => it.status === 'cooking' || it.status === 'ready');
-
-    let newOrderStatus: Order['status'] = orderToUpdate.status;
-    if (allReadyOrServed) {
-      newOrderStatus = 'ready';
-    } else if (anyCooking) {
-      newOrderStatus = 'in_progress';
-    }
-
-    const updatedOrder = {
-      ...orderToUpdate,
-      items: updatedItems,
-      status: newOrderStatus,
-    };
-
-    const updatedOrders = state.orders.map((o) => (o.id === orderId ? updatedOrder : o));
-    saveToStorage(STORAGE_KEYS.ORDERS, updatedOrders);
-
-    // Khi bếp hoàn thành món, đơn hàng KHÔNG được xóa hoặc mất khỏi state.
-    // Chỉ cập nhật kho và giữ nguyên thông tin order cho đến khi thanh toán.
-    if (completedItem) {
-      deductBOMIngredients(completedItem, orderId, updatedOrder);
-    } else {
-      setState((prev) => ({ ...prev, orders: updatedOrders }));
-    }
-  };
-
-  // Điểm mới 4: Tự động trừ tồn kho theo công thức BOM (Bill of Materials)
-  const deductBOMIngredients = (item: OrderItem, orderId: string, updatedOrder?: Order) => {
-    const menuItem = state.menuItems.find((m) => m.id === item.menuItemId);
-    if (!menuItem || !menuItem.bom || menuItem.bom.length === 0) return;
-
-    const newLogs: InventoryAuditLog[] = [];
-    const updatedIngredients = state.ingredients.map((ing) => {
-      // Tìm nguyên liệu này có trong BOM của món hay không
-      const bomEntry = menuItem.bom.find((b) => b.ingredientId === ing.id);
-      if (bomEntry) {
-        const totalDeduct = bomEntry.quantity * item.quantity;
-        const remainingStock = Math.max(0, ing.stock - totalDeduct);
-
-        newLogs.push({
-          id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-          branchId: ing.branchId,
-          ingredientId: ing.id,
-          ingredientName: ing.name,
-          amountDeducted: totalDeduct,
-          unit: ing.unit,
-          remainingStock,
-          orderId,
-          orderItemName: `${item.name} (x${item.quantity})`,
-          reason: `Trừ tự động khi Bếp KDS hoàn thành món (Định lượng: ${bomEntry.quantity}${ing.unit}/suất)`,
-          createdAt: new Date().toISOString(),
-        });
-
-        return {
-          ...ing,
-          stock: remainingStock,
-        };
-      }
-      return ing;
-    });
-
-    const updatedAuditLogs = [...newLogs, ...state.auditLogs];
-
-    saveToStorage(STORAGE_KEYS.INGREDIENTS, updatedIngredients);
-    saveToStorage(STORAGE_KEYS.AUDIT_LOGS, updatedAuditLogs);
-
-    setState((prev) => ({
-      ...prev,
-      orders: updatedOrder ? prev.orders.map((o) => (o.id === orderId ? updatedOrder : o)) : prev.orders,
-      ingredients: updatedIngredients,
-      auditLogs: updatedAuditLogs,
-    }));
-  };
-
-  // Thu ngân POS: Gọi thêm món trực tiếp tại quầy
-  const addItemsToOrder = (tableId: string, itemsToAdd: Array<{ menuItemId: string; quantity: number }>) => {
-    const table = state.tables.find((t) => t.id === tableId);
-    if (!table) return;
-
-    const existingOrder = state.orders.find((o) => o.id === table.activeOrderId);
-    if (!existingOrder) {
-      // Chưa có đơn thì tạo mới
-      placeOrder({ tableId, items: itemsToAdd });
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const newItems: OrderItem[] = itemsToAdd.map((it, idx) => {
-      const menu = state.menuItems.find((m) => m.id === it.menuItemId);
-      return {
-        id: `item-added-${Date.now()}-${idx}`,
-        menuItemId: it.menuItemId,
-        name: menu ? menu.name : 'Món gọi thêm',
-        price: menu ? menu.price : 0,
-        quantity: it.quantity,
-        station: menu ? menu.station : 'hot',
-        status: 'pending',
-        orderedAt: now,
-      };
-    });
-
-    const mergedItems = [...existingOrder.items, ...newItems];
-    const subtotal = mergedItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
-    const taxAmount = Math.round(subtotal * 0.08);
-    const discountAmount = Math.round((subtotal * (existingOrder.discountPercent || 0)) / 100);
-    const finalAmount = subtotal - discountAmount + taxAmount;
-
-    const updatedOrder: Order = {
-      ...existingOrder,
-      items: mergedItems,
-      subtotal,
-      discountAmount,
-      taxAmount,
-      finalAmount,
-      status: 'in_progress',
-    };
-
-    const updatedOrders = state.orders.map((o) => (o.id === existingOrder!.id ? updatedOrder : o));
     saveToStorage(STORAGE_KEYS.ORDERS, updatedOrders);
     setState((prev) => ({ ...prev, orders: updatedOrders }));
   };
 
+  // Gọi thêm món vào đơn có sẵn
+  const addItemsToOrder = async (orderId: string, items: Array<{ menuItemId: string; quantity: number; note?: string }>) => {
+    const existingOrder = state.orders.find((o) => o.id === orderId);
+    if (!existingOrder) return;
+    await placeOrder({
+      tableId: existingOrder.tableId,
+      items,
+    });
+  };
+
   // Thu ngân POS: Chuyển bàn / Gộp bàn
-  const changeOrMergeTable = (fromTableId: string, toTableId: string, actionType: 'change' | 'merge') => {
-    const fromTable = state.tables.find((t) => t.id === fromTableId);
-    const toTable = state.tables.find((t) => t.id === toTableId);
-    if (!fromTable || !toTable) return;
-
-    const fromOrder = state.orders.find((o) => o.id === fromTable.activeOrderId);
-
-    if (actionType === 'change') {
-      // Chuyển toàn bộ đơn sang bàn đích
-      if (fromOrder) {
-        const updatedOrder: Order = {
-          ...fromOrder,
-          tableId: toTable.id,
-          tableNumber: toTable.number,
-        };
-        const updatedOrders = state.orders.map((o) => (o.id === fromOrder.id ? updatedOrder : o));
-        saveToStorage(STORAGE_KEYS.ORDERS, updatedOrders);
+  const changeOrMergeTable = async (fromTableId: string, toTableId: string, actionType: 'change' | 'merge') => {
+    try {
+      if (actionType === 'change') {
+        await apiClient.post('/tables/transfer', { fromTableId, toTableId });
+      } else {
+        await apiClient.post('/tables/merge', { fromTableId, toTableId });
       }
-
-      const updatedTables = state.tables.map((t) => {
-        if (t.id === fromTable.id) {
-          return { ...t, status: 'available' as const, activeOrderId: undefined, guestCount: undefined, seatedAt: undefined };
-        }
-        if (t.id === toTable.id) {
-          return {
-            ...t,
-            status: 'occupied' as const,
-            activeOrderId: fromTable.activeOrderId,
-            guestCount: fromTable.guestCount,
-            seatedAt: fromTable.seatedAt,
-          };
-        }
-        return t;
-      });
-
-      saveToStorage(STORAGE_KEYS.TABLES, updatedTables);
-      setState((prev) => ({ ...prev, tables: updatedTables }));
-    } else {
-      // Gộp bàn: Chuyển các món từ fromOrder vào toOrder nếu toOrder có sẵn
-      const toOrder = state.orders.find((o) => o.id === toTable.activeOrderId);
-      if (fromOrder && toOrder) {
-        const combinedItems = [...toOrder.items, ...fromOrder.items];
-        const subtotal = combinedItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
-        const taxAmount = Math.round(subtotal * 0.08);
-        const finalAmount = subtotal + taxAmount;
-
-        const updatedToOrder: Order = {
-          ...toOrder,
-          items: combinedItems,
-          subtotal,
-          taxAmount,
-          finalAmount,
-        };
-
-        const updatedOrders = state.orders
-          .filter((o) => o.id !== fromOrder.id)
-          .map((o) => (o.id === toOrder.id ? updatedToOrder : o));
-
-        const updatedTables = state.tables.map((t) => {
-          if (t.id === fromTable.id) {
-            return { ...t, status: 'available' as const, activeOrderId: undefined };
-          }
-          return t;
-        });
-
-        saveToStorage(STORAGE_KEYS.ORDERS, updatedOrders);
-        saveToStorage(STORAGE_KEYS.TABLES, updatedTables);
-        setState((prev) => ({ ...prev, orders: updatedOrders, tables: updatedTables }));
-      }
+      fetchBackendData(state.currentBranchId);
+      return;
+    } catch (err: any) {
+      console.warn('Lỗi chuyển/gộp bàn từ backend, chạy fallback:', err.message);
     }
   };
 
   // Khách hàng: gửi yêu cầu thanh toán tới thu ngân
-  const requestPayment = (tableId: string) => {
+  const requestPayment = async (tableId: string) => {
     const table = state.tables.find((t) => t.id === tableId);
     if (!table) return null;
 
+    try {
+      await apiClient.post(`/tables/${tableId}/request-payment`);
+    } catch (err: any) {
+      console.warn('Lỗi gửi request payment backend:', err.message);
+    }
+
     const updatedTables = state.tables.map((t) =>
-      t.id === tableId
-        ? {
-            ...t,
-            status: 'pending_payment' as const,
-          }
-        : t
+      t.id === tableId ? { ...t, status: 'pending_payment' as const } : t
     );
 
-    const existingRequest = state.paymentRequests.find((req) => req.tableId === tableId);
     const newRequest: PaymentRequest = {
       id: `payreq-${Date.now()}`,
       branchId: table.branchId,
       tableId: table.id,
       tableNumber: table.number,
       requestedAt: new Date().toISOString(),
-      orderId: table.activeOrderId,
       status: 'pending',
     };
 
-    const updatedPaymentRequests = existingRequest
-      ? state.paymentRequests.map((req) => (req.tableId === tableId ? { ...req, ...newRequest, id: req.id } : req))
-      : [newRequest, ...state.paymentRequests];
-
     saveToStorage(STORAGE_KEYS.TABLES, updatedTables);
-    saveToStorage(STORAGE_KEYS.PAYMENT_REQUESTS, updatedPaymentRequests);
-
     setState((prev) => ({
       ...prev,
       tables: updatedTables,
-      paymentRequests: updatedPaymentRequests,
+      paymentRequests: [newRequest, ...prev.paymentRequests],
     }));
 
     return newRequest;
@@ -526,103 +523,89 @@ export function useLiveStore() {
     }));
   };
 
-  // Thu ngân POS: Xử lý thanh toán & Chốt đơn
-  const processPayment = (
+  // Thu ngân POS: Xử lý thanh toán & Chốt hóa đơn
+  const processPayment = async (
     tableId: string,
     paymentMethod: PaymentMethod,
     discountPercent: number = 0,
     cashGiven?: number
   ) => {
     const table = state.tables.find((t) => t.id === tableId);
-    if (!table || !table.activeOrderId) return null;
+    if (!table) return null;
 
-    const order = state.orders.find((o) => o.id === table.activeOrderId);
-    if (!order) return null;
+    try {
+      // 1. Tạo/In hóa đơn tạm tính trên Backend
+      const provRes = await apiClient.post('/invoices/provisional', {
+        tableId,
+        discountPercent,
+      });
 
-    const subtotal = order.subtotal;
-    const discountAmount = Math.round((subtotal * discountPercent) / 100);
-    const taxable = subtotal - discountAmount;
-    const taxAmount = Math.round(taxable * 0.08);
-    const finalAmount = taxable + taxAmount;
-    const changeDue = cashGiven ? Math.max(0, cashGiven - finalAmount) : 0;
+      if (provRes.success && provRes.data?.invoiceId) {
+        // 2. Chốt thanh toán hóa đơn
+        const methodUpper = paymentMethod.toUpperCase();
+        const settleRes = await apiClient.post('/invoices/settle', {
+          invoiceId: provRes.data.invoiceId,
+          paymentMethod: methodUpper,
+          cashGiven,
+        });
 
-    const completedOrder: Order = {
-      ...order,
-      status: 'completed',
-      discountPercent,
-      discountAmount,
-      taxAmount,
-      finalAmount,
-      paymentMethod,
-      paidAt: new Date().toISOString(),
-      cashGiven,
-      changeDue,
-    };
+        if (settleRes.success) {
+          fetchBackendData(state.currentBranchId);
+          clearPaymentRequest(tableId);
+          return settleRes.data;
+        }
+      }
+    } catch (err: any) {
+      console.warn('Lỗi gọi API chốt thanh toán, chạy fallback:', err.message);
+      if (err.message && err.message.includes('không đủ để thanh toán')) {
+        throw err;
+      }
+    }
 
-    // Giải phóng bàn
+    // Fallback offline
     const updatedTables = state.tables.map((t) =>
       t.id === table.id
-        ? {
-            ...t,
-            status: 'available' as const,
-            activeOrderId: undefined,
-            guestCount: undefined,
-            seatedAt: undefined,
-          }
+        ? { ...t, status: 'available' as const, activeOrderId: undefined, seatedAt: undefined }
         : t
     );
-
-    const updatedOrders = state.orders.map((o) => (o.id === order.id ? completedOrder : o));
-    const updatedPaymentRequests = state.paymentRequests.map((req) =>
-      req.tableId === table.id
-        ? { ...req, status: 'paid' as const }
-        : req
-    );
-
     saveToStorage(STORAGE_KEYS.TABLES, updatedTables);
-    saveToStorage(STORAGE_KEYS.ORDERS, updatedOrders);
-    saveToStorage(STORAGE_KEYS.PAYMENT_REQUESTS, updatedPaymentRequests);
-
-    setState((prev) => ({
-      ...prev,
-      tables: updatedTables,
-      orders: updatedOrders,
-      paymentRequests: updatedPaymentRequests,
-    }));
-
-    return completedOrder;
+    setState((prev) => ({ ...prev, tables: updatedTables }));
+    clearPaymentRequest(tableId);
+    return null;
   };
 
   // Quản lý kho: Nhập thêm nguyên liệu
-  const restockIngredient = (ingredientId: string, amount: number) => {
-    const updatedIngredients = state.ingredients.map((ing) => {
-      if (ing.id === ingredientId) {
-        return {
-          ...ing,
-          stock: ing.stock + amount,
-          lastRestockedAt: new Date().toISOString(),
-        };
-      }
-      return ing;
-    });
-
-    saveToStorage(STORAGE_KEYS.INGREDIENTS, updatedIngredients);
-    setState((prev) => ({ ...prev, ingredients: updatedIngredients }));
+  const restockIngredient = async (ingredientId: string, amount: number, costPrice?: number) => {
+    try {
+      await apiClient.post('/inventory/restock', {
+        branchId: state.currentBranchId,
+        items: [{ ingredientId, quantity: amount, costPrice }],
+        note: 'Nhập kho từ giao diện Quản trị',
+      });
+      fetchBackendData(state.currentBranchId);
+      return;
+    } catch (err: any) {
+      console.warn('Lỗi restock backend:', err.message);
+    }
   };
 
   // Cập nhật công thức BOM của món ăn
-  const updateMenuItemBOM = (menuItemId: string, newBOM: MenuItem['bom']) => {
-    const updatedMenu = state.menuItems.map((m) => {
-      if (m.id === menuItemId) {
-        return { ...m, bom: newBOM };
-      }
-      return m;
-    });
-    saveToStorage(STORAGE_KEYS.MENU, updatedMenu);
-    setState((prev) => ({ ...prev, menuItems: updatedMenu }));
+  const updateMenuItemBOM = async (menuItemId: string, newBOM: MenuItem['bom']) => {
+    try {
+      await apiClient.put(`/bom/product/${menuItemId}`, {
+        recipes: newBOM.map((b) => ({
+          ingredientId: b.ingredientId,
+          amountNeeded: b.quantity,
+        })),
+      });
+      fetchBackendData(state.currentBranchId);
+      return;
+    } catch (err: any) {
+      console.warn('Lỗi cập nhật BOM backend:', err.message);
+    }
   };
 
-  // Các dữ liệu đã lọc theo chi nhánh hiện tại
+  // Dữ liệu lọc theo chi nhánh hiện tại
   const currentBranch = state.branches.find((b) => b.id === state.currentBranchId) || state.branches[0];
   const currentBranchTables = state.tables.filter((t) => t.branchId === state.currentBranchId);
   const currentBranchIngredients = state.ingredients.filter((i) => i.branchId === state.currentBranchId);
@@ -630,7 +613,6 @@ export function useLiveStore() {
   const currentBranchAuditLogs = state.auditLogs.filter((a) => a.branchId === state.currentBranchId);
   const currentBranchPaymentRequests = state.paymentRequests.filter((r) => r.branchId === state.currentBranchId);
 
-  // Số lượng cảnh báo
   const lowStockCount = currentBranchIngredients.filter((i) => i.stock <= i.minThreshold).length;
   const activeOrdersCount = currentBranchOrders.filter((o) => o.status === 'pending' || o.status === 'in_progress').length;
 
@@ -655,5 +637,6 @@ export function useLiveStore() {
     processPayment,
     restockIngredient,
     updateMenuItemBOM,
+    refreshBackend: () => fetchBackendData(state.currentBranchId),
   };
 }

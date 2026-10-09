@@ -30,7 +30,7 @@ function LoginContent() {
   const searchParams = useSearchParams();
   const errorParam = searchParams.get('error');
 
-  const { session, isReady, login, logout } = useCurrentAuth();
+  const { session, isReady, login, loginWithApi, logout } = useCurrentAuth();
   const { branches, currentBranchId, setBranch, currentBranch } = useLiveStore();
 
   const [email, setEmail] = useState('cashier@smartpos.vn');
@@ -40,26 +40,32 @@ function LoginContent() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // Xử lý đăng nhập
-  const doLogin = (role: UserRole, targetEmail: string) => {
+  const doLogin = async (role: UserRole, targetEmail: string, pass = '123456') => {
     const acc = DEMO_STAFF_ACCOUNTS.find((a) => a.role === role);
     if (!acc) return;
 
     setIsLoggingIn(true);
     setErrorMsg('');
 
-    const staffId = `${acc.role}-${targetEmail.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-
-    login({
-      id: staffId,
-      name: acc.name,
-      email: targetEmail,
-      role: acc.role,
-      branchId: currentBranchId,
-      branchName: currentBranch.name,
-    });
-
-    // Luôn chuyển đến đúng targetRoute của vai trò được chọn
-    router.push(acc.targetRoute);
+    try {
+      // Kết nối trực tiếp tới Backend API để lấy JWT accessToken
+      await loginWithApi(targetEmail, pass, currentBranch.name);
+      router.push(acc.targetRoute);
+    } catch (err: any) {
+      console.warn('Backend API login fallback:', err.message);
+      const staffId = `${acc.role}-${targetEmail.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+      login({
+        id: staffId,
+        name: acc.name,
+        email: targetEmail,
+        role: acc.role,
+        branchId: currentBranchId,
+        branchName: currentBranch.name,
+      });
+      router.push(acc.targetRoute);
+    } finally {
+      setIsLoggingIn(false);
+    }
   };
 
   const handleFormLogin = (e: React.FormEvent) => {
@@ -74,13 +80,13 @@ function LoginContent() {
       setErrorMsg('Mật khẩu không chính xác (Mật khẩu mặc định: 123456).');
       return;
     }
-    doLogin(foundDemo.role, email);
+    doLogin(foundDemo.role, email, password);
   };
 
   const handleQuickLogin = (role: UserRole) => {
     const acc = DEMO_STAFF_ACCOUNTS.find((a) => a.role === role);
     if (!acc) return;
-    doLogin(acc.role, acc.email);
+    doLogin(acc.role, acc.email, acc.password);
   };
 
   const roleIcons = {

@@ -194,6 +194,7 @@ export default function TableOrderPage() {
     placeOrder({
       tableId: currentTable.id,
       guestCount: currentTable.guestCount || 2,
+      tableToken: guestToken || undefined,
       items: cart.map((c) => ({
         menuItemId: c.menuItem.id,
         quantity: c.quantity,

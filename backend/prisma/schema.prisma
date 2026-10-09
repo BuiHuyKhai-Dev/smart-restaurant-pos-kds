@@ -8,11 +8,424 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// Model test kết nối ban đầu
-model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
-  role      String   @default("WAITER")
-  createdAt DateTime @default(now())
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum Role {
+  ADMIN
+  MANAGER
+  CASHIER
+  COOK
+  WAITER
+}
+
+enum TableArea {
+  GROUND
+  FLOOR2
+  OUTDOOR
+  VIP
+}
+
+enum TableStatus {
+  AVAILABLE
+  OCCUPIED
+  PENDING_PAYMENT
+  RESERVED
+}
+
+enum SessionStatus {
+  OPEN
+  PAYMENT_PENDING
+  CLOSED
+  CANCELLED
+}
+
+enum OrderItemStatus {
+  PENDING
+  COOKING
+  READY
+  SERVED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  VIETQR
+  CARD
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  CANCELLED
+}
+
+// ==========================================
+// 1. NGƯỜI DÙNG & CHI NHÁNH
+// ==========================================
+
+model Account {
+  id       String    @id @default(uuid())
+  username String    @unique
+  email    String?   @unique
+  password String
+  fullName String?
+  role     Role      @default(WAITER)
+  branchId String?   @map("branch_id")
+  branch   Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  invoices Invoice[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("accounts")
+}
+
+model Branch {
+  id          String  @id @default(uuid())
+  name        String
+  address     String
+  phoneNumber String? @map("phone_number")
+  isActive    Boolean @default(true) @map("is_active")
+
+  accounts           Account[]
+  tables             Table[]
+  orderSessions      OrderSession[]
+  inventories        Inventory[]
+  invoices           Invoice[]
+  inventoryAuditLogs InventoryAuditLog[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("branches")
+}
+
+// ==========================================
+// 2. BÀN ĂN & PHIÊN GỌI MÓN (ORDER SESSION)
+// ==========================================
+
+model Table {
+  id          String      @id @default(uuid())
+  branchId    String      @map("branch_id")
+  branch      Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  tableNumber String      @map("table_number")
+  displayName String?     @map("display_name")
+  capacity    Int         @default(4)
+  area        TableArea   @default(GROUND)
+  status      TableStatus @default(AVAILABLE)
+  qrToken     String?     @map("qr_token")
+  seatedAt    DateTime?   @map("seated_at")
+  lastOrderAt DateTime?   @map("last_order_at")
+
+  orderSessions OrderSession[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([branchId, tableNumber])
+  @@map("tables")
+}
+
+model OrderSession {
+  id                 String        @id @default(uuid())
+  tableId            String        @map("table_id")
+  table              Table         @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  branchId           String        @map("branch_id")
+  branch             Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  guestCount         Int           @default(2) @map("guest_count")
+  status             SessionStatus @default(OPEN)
+  openedAt           DateTime      @default(now()) @map("opened_at")
+  closedAt           DateTime?     @map("closed_at")
+  paymentRequestedAt DateTime?     @map("payment_requested_at")
+
+  orders  Order[]
+  invoice Invoice?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("order_sessions")
+}
+
+// ==========================================
+// 3. ĐƠN HÀNG & MÓN ĂN TRONG ĐƠN (KDS ROUTING)
+// ==========================================
+
+model Order {
+  id             String       @id @default(uuid())
+  orderSessionId String       @map("order_session_id")
+  orderSession   OrderSession @relation(fields: [orderSessionId], references: [id], onDelete: Cascade)
+  orderCode      String       @map("order_code")
+  note           String?
+
+  items OrderItem[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("orders")
+}
+
+model KitchenStation {
+  id          String  @id @default(uuid())
+  name        String
+  description String?
+  color       String?
+  iconName    String? @map("icon_name")
+
+  products   Product[]
+  orderItems OrderItem[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("kitchen_stations")
+}
+
+model OrderItem {
+  id               String          @id @default(uuid())
+  orderId          String          @map("order_id")
+  order            Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId        String          @map("product_id")
+  product          Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  kitchenStationId String          @map("kitchen_station_id")
+  kitchenStation   KitchenStation  @relation(fields: [kitchenStationId], references: [id], onDelete: Restrict)
+  price            Decimal         @db.Decimal(12, 2)
+  quantity         Int             @default(1)
+  note             String?
+  status           OrderItemStatus @default(PENDING)
+  startedAt        DateTime?       @map("started_at")
+  completedAt      DateTime?       @map("completed_at")
+  servedAt         DateTime?       @map("served_at")
+  cancelledAt      DateTime?       @map("cancelled_at")
+
+  modifiers          OrderItemModifier[]
+  inventoryAuditLogs InventoryAuditLog[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("order_items")
+}
+
+model OrderItemModifier {
+  id             String       @id @default(uuid())
+  orderItemId    String       @map("order_item_id")
+  orderItem      OrderItem    @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  itemModifierId String       @map("item_modifier_id")
+  itemModifier   ItemModifier @relation(fields: [itemModifierId], references: [id], onDelete: Restrict)
+  extraPrice     Decimal      @default(0) @map("extra_price") @db.Decimal(12, 2)
+  quantity       Int          @default(1)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("order_item_modifiers")
+}
+
+// ==========================================
+// 4. THỰC ĐƠN, DANH MỤC & MODIFIERS
+// ==========================================
+
+model Category {
+  id           String    @id @default(uuid())
+  name         String
+  description  String?
+  displayOrder Int       @default(0) @map("display_order")
+  products     Product[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("categories")
+}
+
+model Product {
+  id                  String         @id @default(uuid())
+  categoryId          String         @map("category_id")
+  category            Category       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  kitchenStationId    String         @map("kitchen_station_id")
+  kitchenStation      KitchenStation @relation(fields: [kitchenStationId], references: [id], onDelete: Restrict)
+  name                String
+  description         String?
+  price               Decimal        @db.Decimal(12, 2)
+  pictureLink         String?        @map("picture_link")
+  isAvailable         Boolean        @default(true) @map("is_available")
+  standardPrepMinutes Int            @default(15) @map("standard_prep_minutes")
+
+  modifiers  ProductModifier[]
+  recipes    Recipe[]
+  orderItems OrderItem[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("products")
+}
+
+model ModifierGroup {
+  id           String  @id @default(uuid())
+  name         String
+  isRequired   Boolean @default(false) @map("is_required")
+  isMultiple   Boolean @default(false) @map("is_multiple")
+  minSelection Int     @default(0) @map("min_selection")
+  maxSelection Int     @default(1) @map("max_selection")
+
+  productModifiers ProductModifier[]
+  items            ItemModifier[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("modifier_groups")
+}
+
+model ProductModifier {
+  productId       String        @map("product_id")
+  product         Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  modifierGroupId String        @map("modifier_group_id")
+  modifierGroup   ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  @@id([productId, modifierGroupId])
+  @@map("product_modifiers")
+}
+
+model ItemModifier {
+  id              String        @id @default(uuid())
+  modifierGroupId String        @map("modifier_group_id")
+  modifierGroup   ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+  name            String
+  extraPrice      Decimal       @default(0) @map("extra_price") @db.Decimal(12, 2)
+  isAvailable     Boolean       @default(true) @map("is_available")
+
+  recipes            ModifierRecipe[]
+  orderItemModifiers OrderItemModifier[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("item_modifiers")
+}
+
+// ==========================================
+// 5. NGUYÊN LIỆU, ĐỊNH LƯỢNG BOM & TỒN KHO
+// ==========================================
+
+model Ingredient {
+  id          String  @id @default(uuid())
+  name        String
+  baseUnit    String  @map("base_unit")
+  description String?
+
+  inventories     Inventory[]
+  recipes         Recipe[]
+  modifierRecipes ModifierRecipe[]
+  auditLogs       InventoryAuditLog[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("ingredients")
+}
+
+model Inventory {
+  id              String     @id @default(uuid())
+  branchId        String     @map("branch_id")
+  branch          Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  ingredientId    String     @map("ingredient_id")
+  ingredient      Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  currentStock    Decimal    @default(0) @map("current_stock") @db.Decimal(12, 3)
+  minSafetyStock  Decimal    @default(0) @map("min_safety_stock") @db.Decimal(12, 3)
+  costPrice       Decimal    @default(0) @map("cost_price") @db.Decimal(12, 2)
+  supplier        String?
+  lastRestockedAt DateTime?  @map("last_restocked_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([branchId, ingredientId])
+  @@map("inventories")
+}
+
+model Recipe {
+  id           String     @id @default(uuid())
+  productId    String     @map("product_id")
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  ingredientId String     @map("ingredient_id")
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  amountNeeded Decimal    @map("amount_needed") @db.Decimal(12, 3)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([productId, ingredientId])
+  @@map("recipes")
+}
+
+model ModifierRecipe {
+  id             String       @id @default(uuid())
+  itemModifierId String       @map("item_modifier_id")
+  itemModifier   ItemModifier @relation(fields: [itemModifierId], references: [id], onDelete: Cascade)
+  ingredientId   String       @map("ingredient_id")
+  ingredient     Ingredient   @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  amountNeeded   Decimal      @map("amount_needed") @db.Decimal(12, 3)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([itemModifierId, ingredientId])
+  @@map("modifier_recipes")
+}
+
+model InventoryAuditLog {
+  id             String     @id @default(uuid())
+  branchId       String     @map("branch_id")
+  branch         Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  ingredientId   String     @map("ingredient_id")
+  ingredient     Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  orderItemId    String?    @map("order_item_id")
+  orderItem      OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  amountDeducted Decimal    @map("amount_deducted") @db.Decimal(12, 3)
+  remainingStock Decimal    @map("remaining_stock") @db.Decimal(12, 3)
+  reason         String
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("inventory_audit_logs")
+}
+
+// ==========================================
+// 6. THANH TOÁN & HÓA ĐƠN
+// ==========================================
+
+model Invoice {
+  id              String        @id @default(uuid())
+  orderSessionId  String        @unique @map("order_session_id")
+  orderSession    OrderSession  @relation(fields: [orderSessionId], references: [id], onDelete: Restrict)
+  branchId        String        @map("branch_id")
+  branch          Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  accountId       String?       @map("account_id")
+  account         Account?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  invoiceCode     String        @unique @map("invoice_code")
+  subtotal        Decimal       @db.Decimal(12, 2)
+  discountPercent Decimal       @default(0) @map("discount_percent") @db.Decimal(5, 2)
+  discountAmount  Decimal       @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  taxPercent      Decimal       @default(8) @map("tax_percent") @db.Decimal(5, 2)
+  taxAmount       Decimal       @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  finalAmount     Decimal       @map("final_amount") @db.Decimal(12, 2)
+  paymentMethod   PaymentMethod @default(CASH) @map("payment_method")
+  paymentStatus   PaymentStatus @default(PAID) @map("payment_status")
+  cashGiven       Decimal?      @map("cash_given") @db.Decimal(12, 2)
+  changeDue       Decimal?      @map("change_due") @db.Decimal(12, 2)
+  paidAt          DateTime?     @map("paid_at")
+  printedAt       DateTime?     @map("printed_at")
+  printCount      Int           @default(0) @map("print_count")
+  cancelledAt     DateTime?     @map("cancelled_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("invoices")
 }

@@ -71,9 +71,24 @@ export async function createTableGuestToken(tableId: string, tableNumber: string
   return `${encodedPayload}.${signature}`;
 }
 
+import { apiClient } from './api-client';
+
 export async function verifyTableGuestToken(token: string, tableId: string): Promise<boolean> {
   if (!token || !tableId) return false;
 
+  // 1. Thử xác thực trực tiếp qua Backend API (HMAC backend token do POS phát hành)
+  try {
+    const res = await apiClient.get<any>('/table-access/me', { tableToken: token });
+    if (res && res.success && res.data) {
+      if (res.data.id === tableId || res.data.tableNumber === tableId) {
+        return true;
+      }
+    }
+  } catch {
+    // Nếu API backend trả về lỗi hoặc chưa kết nối, thử xác thực client-side fallback
+  }
+
+  // 2. Client-side fallback token verification
   const [encodedPayload, signature] = token.split('.');
   if (!encodedPayload || !signature) return false;
 
@@ -86,7 +101,7 @@ export async function verifyTableGuestToken(token: string, tableId: string): Pro
       issuedAt?: number;
     };
 
-    if (payload.tableId !== tableId) return false;
+    if (payload.tableId !== tableId && payload.tableNumber !== tableId) return false;
     if (payload.scope !== 'guest-table-access') return false;
     if (!payload.issuedAt || Number.isNaN(payload.issuedAt)) return false;
 
