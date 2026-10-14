@@ -121,6 +121,9 @@ export function isLocalDevGuestAccessAllowed(hostname?: string): boolean {
     host === '0.0.0.0' ||
     host === '::1' ||
     host === '[::1]' ||
+    host.startsWith('192.168.') ||
+    host.startsWith('10.') ||
+    host.startsWith('172.') ||
     host === ''
   );
 }

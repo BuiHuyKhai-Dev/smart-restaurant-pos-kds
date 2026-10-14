@@ -29,6 +29,7 @@ import {
 import { useLiveStore } from '@/lib/live-store';
 import { isLocalDevGuestAccessAllowed, verifyTableGuestToken } from '@/lib/table-guest-token';
 import { MenuItem, TableArea } from '@/lib/types';
+import { socketService } from '@/lib/socket-client';
 
 type TabType = 'menu' | 'order_status';
 type CategoryType = 'all' | 'hot' | 'cold' | 'bar';
@@ -76,6 +77,9 @@ export default function TableOrderPage() {
   useEffect(() => {
     if (currentTable && selectedArea === 'all') {
       setSelectedArea(currentTable.area);
+    }
+    if (currentTable?.id) {
+      socketService.joinTable(currentTable.id);
     }
   }, [currentTable, selectedArea]);
 
@@ -126,7 +130,10 @@ export default function TableOrderPage() {
   const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   const activeOrder = currentBranchOrders.find(
-    (o) => o.tableId === currentTable.id && o.status !== 'completed' && o.status !== 'cancelled'
+    (o) =>
+      (o.tableId === currentTable.id || o.tableNumber === currentTable.number || o.tableNumber === currentTable.id) &&
+      o.status !== 'completed' &&
+      o.status !== 'cancelled'
   );
 
   const paymentSuccessNotice = currentBranchPaymentRequests.find(

@@ -45,12 +45,18 @@ export class TablesService {
                 items: {
                   select: {
                     id: true,
+                    productId: true,
+                    kitchenStationId: true,
                     product: {
-                      select: { name: true },
+                      select: { name: true, kitchenStationId: true },
                     },
                     status: true,
                     quantity: true,
                     price: true,
+                    note: true,
+                    createdAt: true,
+                    startedAt: true,
+                    completedAt: true,
                   },
                 },
               },

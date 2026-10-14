@@ -98,13 +98,59 @@ export function useLiveStore() {
         }));
       }
 
-      // 2. Tải sơ đồ bàn theo chi nhánh
+      // 2. Tải sơ đồ bàn theo chi nhánh và đồng bộ toàn bộ đơn hàng đang chạy
       const tableRes = await apiClient.get(`/tables?branchId=${branchId}`).catch(() => null);
       let tables = INITIAL_TABLES;
+      let backendOrders: Order[] = [];
+
       if (tableRes?.success && Array.isArray(tableRes.data)) {
         tables = tableRes.data.map((t: any) => {
           const activeSession = t.orderSessions?.[0];
           const statusLower = t.status.toLowerCase() as TableStatus;
+
+          // Trích xuất orders từ session của bàn này
+          if (activeSession?.orders && Array.isArray(activeSession.orders)) {
+            for (const o of activeSession.orders) {
+              const mappedItems: OrderItem[] = (o.items || []).map((it: any) => ({
+                id: it.id,
+                menuItemId: it.productId || it.product?.id || '',
+                name: it.product?.name || 'Món ăn',
+                price: Number(it.price || 0),
+                quantity: it.quantity || 1,
+                station: (it.kitchenStationId || it.kitchenStation?.id || it.product?.kitchenStationId || 'hot').toLowerCase(),
+                selectedSize: it.selectedSize || undefined,
+                selectedSpicyLevel: it.selectedSpicyLevel || undefined,
+                selectedToppings: it.selectedToppings || [],
+                note: it.note || undefined,
+                status: (it.status || 'PENDING').toLowerCase() as OrderItemStatus,
+                orderedAt: it.createdAt || o.createdAt,
+                startedCookingAt: it.startedAt || undefined,
+                completedAt: it.completedAt || undefined,
+              }));
+
+              const subtotal = mappedItems.reduce((s, item) => s + item.price * item.quantity, 0);
+              const taxAmount = Math.round(subtotal * 0.08);
+
+              backendOrders.push({
+                id: o.id,
+                orderCode: o.orderCode || `ORD-${o.id.slice(-4)}`,
+                branchId: t.branchId,
+                tableId: t.id,
+                tableNumber: t.tableNumber,
+                items: mappedItems,
+                status: activeSession.status === 'PAYMENT_PENDING' ? 'ready' : 'in_progress',
+                createdAt: o.createdAt || new Date().toISOString(),
+                guestCount: activeSession.guestCount || 2,
+                subtotal,
+                discountPercent: 0,
+                discountAmount: 0,
+                taxPercent: 8,
+                taxAmount,
+                finalAmount: subtotal + taxAmount,
+              });
+            }
+          }
+
           return {
             id: t.id,
             branchId: t.branchId,
@@ -113,7 +159,7 @@ export function useLiveStore() {
             capacity: t.capacity || 4,
             area: t.area?.toLowerCase() || 'ground',
             status: statusLower,
-            activeOrderId: activeSession?.id,
+            activeOrderId: activeSession?.orders?.[0]?.id || activeSession?.id,
             guestCount: activeSession?.guestCount,
             seatedAt: t.seatedAt || activeSession?.openedAt,
           };
@@ -145,40 +191,49 @@ export function useLiveStore() {
         }));
       }
 
-      // 4. Tải tồn kho chi nhánh
-      const invRes = await apiClient.get(`/inventory?branchId=${branchId}`).catch(() => null);
-      let ingredients = INITIAL_INGREDIENTS;
-      if (invRes?.success && Array.isArray(invRes.data)) {
-        ingredients = invRes.data.map((inv: any) => ({
-          id: inv.ingredientId,
-          branchId: inv.branchId,
-          name: inv.name,
-          unit: inv.unit,
-          stock: inv.currentStock,
-          minThreshold: inv.minSafetyStock,
-          costPrice: inv.costPrice,
-          supplier: inv.supplier,
-          lastRestockedAt: inv.lastRestockedAt,
-        }));
+      // 4. Chỉ tải tồn kho và nhật ký kho nếu là tài khoản nhân viên (đã đăng nhập)
+      let hasStaffToken = false;
+      if (typeof window !== 'undefined') {
+        try {
+          hasStaffToken = !!localStorage.getItem('pos_kds_access_token');
+        } catch {}
       }
 
-      // 5. Tải nhật ký kho
-      const auditRes = await apiClient.get(`/inventory/audit-logs?branchId=${branchId}`).catch(() => null);
+      let ingredients = INITIAL_INGREDIENTS;
       let auditLogs: InventoryAuditLog[] = [];
-      if (auditRes?.success && Array.isArray(auditRes.data)) {
-        auditLogs = auditRes.data.map((a: any) => ({
-          id: a.id,
-          branchId: a.branchId,
-          ingredientId: a.ingredientId,
-          ingredientName: a.ingredient?.name || '',
-          amountDeducted: Number(a.amountDeducted),
-          unit: a.ingredient?.baseUnit || 'g',
-          remainingStock: Number(a.remainingStock),
-          orderId: a.orderItemId || '',
-          orderItemName: a.orderItem?.product?.name || '',
-          reason: a.reason,
-          createdAt: a.createdAt,
-        }));
+
+      if (hasStaffToken) {
+        const invRes = await apiClient.get(`/inventory?branchId=${branchId}`).catch(() => null);
+        if (invRes?.success && Array.isArray(invRes.data)) {
+          ingredients = invRes.data.map((inv: any) => ({
+            id: inv.ingredientId,
+            branchId: inv.branchId,
+            name: inv.name,
+            unit: inv.unit,
+            stock: inv.currentStock,
+            minThreshold: inv.minSafetyStock,
+            costPrice: inv.costPrice,
+            supplier: inv.supplier,
+            lastRestockedAt: inv.lastRestockedAt,
+          }));
+        }
+
+        const auditRes = await apiClient.get(`/inventory/audit-logs?branchId=${branchId}`).catch(() => null);
+        if (auditRes?.success && Array.isArray(auditRes.data)) {
+          auditLogs = auditRes.data.map((a: any) => ({
+            id: a.id,
+            branchId: a.branchId,
+            ingredientId: a.ingredientId,
+            ingredientName: a.ingredient?.name || '',
+            amountDeducted: Number(a.amountDeducted),
+            unit: a.ingredient?.baseUnit || 'g',
+            remainingStock: Number(a.remainingStock),
+            orderId: a.orderItemId || '',
+            orderItemName: a.orderItem?.product?.name || '',
+            reason: a.reason,
+            createdAt: a.createdAt,
+          }));
+        }
       }
 
       setState((prev) => ({
@@ -186,6 +241,7 @@ export function useLiveStore() {
         currentBranchId: branchId,
         branches,
         tables,
+        orders: backendOrders.length > 0 ? backendOrders : prev.orders,
         menuItems,
         ingredients,
         auditLogs,
@@ -209,30 +265,17 @@ export function useLiveStore() {
     // Lắng nghe sự kiện Realtime từ Backend
     const handleOrderPlaced = (data: any) => {
       console.log('⚡ Socket [order:placed]:', data);
-      setState((prev) => {
-        // Cập nhật trạng thái bàn sang occupied
-        const updatedTables = prev.tables.map((t) =>
-          t.id === data.tableId
-            ? { ...t, status: 'occupied' as const, activeOrderId: data.orderId, seatedAt: t.seatedAt || new Date().toISOString() }
-            : t
-        );
-        return { ...prev, tables: updatedTables };
-      });
+      fetchBackendData(storedBranchId);
+    };
+
+    const handleKitchenNewItems = (payload: any) => {
+      console.log('⚡ Socket [kitchen:new_items]:', payload);
+      fetchBackendData(storedBranchId);
     };
 
     const handleItemStatusUpdated = (item: any) => {
       console.log('⚡ Socket [order_item:status_updated]:', item);
-      setState((prev) => {
-        const updatedOrders = prev.orders.map((o) => ({
-          ...o,
-          items: o.items.map((it) => (it.id === item.id ? { ...it, status: item.status.toLowerCase() as OrderItemStatus } : it)),
-        }));
-        return { ...prev, orders: updatedOrders };
-      });
-      // Nếu món READY thì cập nhật lại bảng cân đối kho
-      if (item.status === 'READY') {
-        fetchBackendData(storedBranchId);
-      }
+      fetchBackendData(storedBranchId);
     };
 
     const handlePaymentRequested = (payload: any) => {
@@ -256,6 +299,7 @@ export function useLiveStore() {
           paymentRequests: exists ? prev.paymentRequests : [newReq, ...prev.paymentRequests],
         };
       });
+      fetchBackendData(storedBranchId);
     };
 
     const handlePaymentCompleted = (payload: any) => {
@@ -267,19 +311,16 @@ export function useLiveStore() {
         const updatedReqs = prev.paymentRequests.filter((r) => r.tableId !== payload.tableId);
         return { ...prev, tables: updatedTables, paymentRequests: updatedReqs };
       });
+      fetchBackendData(storedBranchId);
     };
 
     const handleTableUpdated = (payload: any) => {
       console.log('⚡ Socket [table:updated]:', payload);
-      setState((prev) => {
-        const updatedTables = prev.tables.map((t) =>
-          t.id === payload.tableId ? { ...t, status: payload.status.toLowerCase() as TableStatus } : t
-        );
-        return { ...prev, tables: updatedTables };
-      });
+      fetchBackendData(storedBranchId);
     };
 
     socket.on('order:placed', handleOrderPlaced);
+    socket.on('kitchen:new_items', handleKitchenNewItems);
     socket.on('order_item:status_updated', handleItemStatusUpdated);
     socket.on('payment:requested', handlePaymentRequested);
     socket.on('payment:completed', handlePaymentCompleted);
@@ -287,10 +328,10 @@ export function useLiveStore() {
 
     return () => {
       socket.off('order:placed', handleOrderPlaced);
+      socket.off('kitchen:new_items', handleKitchenNewItems);
       socket.off('order_item:status_updated', handleItemStatusUpdated);
       socket.off('payment:requested', handlePaymentRequested);
       socket.off('payment:completed', handlePaymentCompleted);
-      socket.off('table:updated', handleTableUpdated);
     };
   }, [fetchBackendData]);
 

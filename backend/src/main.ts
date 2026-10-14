@@ -11,11 +11,8 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api');
 
-  const origins = config
-    .get<string>('CORS_ORIGIN', 'http://localhost:3000')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
+  const corsRaw = config.get<string>('CORS_ORIGIN', '*');
+  const origins = corsRaw === '*' ? '*' : corsRaw.split(',').map((o) => o.trim()).filter(Boolean);
   app.enableCors({ origin: origins, credentials: true });
 
   app.useGlobalPipes(
@@ -29,7 +26,7 @@ async function bootstrap() {
   app.enableShutdownHooks();
 
   const port = config.get<number>('PORT', 4000);
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
   Logger.log(`🚀 API đang chạy tại http://localhost:${port}/api`, 'Bootstrap');
 }
 bootstrap();

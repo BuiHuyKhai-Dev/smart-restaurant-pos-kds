@@ -21,6 +21,7 @@ import { useCurrentAuth } from '@/lib/auth-store';
 import { TableArea, TableStatus } from '@/lib/types';
 import { ReceiptModal } from '@/components/receipt-modal';
 import { VietQRModal } from '@/components/vietqr-modal';
+import { TableQRModal } from '@/components/table-qr-modal';
 
 export default function POSCashierPage() {
   const router = useRouter();
@@ -46,6 +47,7 @@ export default function POSCashierPage() {
   // Modals
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [isVietQROpen, setIsVietQROpen] = useState(false);
+  const [isTableQROpen, setIsTableQROpen] = useState(false);
   const [isCashModalOpen, setIsCashModalOpen] = useState(false);
   const [isAddDishModalOpen, setIsAddDishModalOpen] = useState(false);
   const [isChangeTableModalOpen, setIsChangeTableModalOpen] = useState(false);
@@ -408,14 +410,24 @@ export default function POSCashierPage() {
                 </p>
               </div>
 
-              {/* Nút thêm món trực tiếp tại quầy */}
-              <button
-                onClick={() => setIsAddDishModalOpen(true)}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md transition-colors cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Thêm Món</span>
-              </button>
+              {/* Nút thao tác của bàn */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsTableQROpen(true)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold text-xs border border-amber-500/30 transition-colors cursor-pointer shadow-sm"
+                  title="Hiển thị mã QR của bàn để khách quét"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>Mã QR Bàn</span>
+                </button>
+                <button
+                  onClick={() => setIsAddDishModalOpen(true)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Thêm Món</span>
+                </button>
+              </div>
             </div>
 
             {/* Danh sách món trong đơn */}
@@ -713,6 +725,15 @@ export default function POSCashierPage() {
           </div>
         </div>
       )}
+
+      {/* Modal Hiển Thị Mã QR Của Bàn Đang Chọn */}
+      <TableQRModal
+        isOpen={isTableQROpen}
+        onClose={() => setIsTableQROpen(false)}
+        tableId={selectedTable.id}
+        tableNumber={selectedTable.number}
+        tableName={selectedTable.displayName}
+      />
     </div>
   );
 }
