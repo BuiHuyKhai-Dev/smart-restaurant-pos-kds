@@ -146,6 +146,8 @@ export interface OrderItem {
   startedCookingAt?: string;
   completedAt?: string;
   isLate?: boolean; // Cảnh báo quá hạn
+  orderCode?: string; // Mã đơn con mà món này thuộc về (ORD-101...)
+  batchIndex?: number; // Đợt gọi món: 1, 2, 3...
 }
 
 // Trạng thái đơn hàng tổng
@@ -172,6 +174,8 @@ export interface Order {
   paidAt?: string;
   cashGiven?: number;
   changeDue?: number;
+  orderSessionId?: string;
+  batchIndex?: number;
 }
 
 // Người dùng phân quyền

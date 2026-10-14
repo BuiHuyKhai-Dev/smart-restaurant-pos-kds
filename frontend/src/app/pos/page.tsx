@@ -36,6 +36,8 @@ export default function POSCashierPage() {
     processPayment,
     currentBranchPaymentRequests,
     clearPaymentRequest,
+    getTableActiveOrders,
+    getTableConsolidatedOrder,
   } = useLiveStore();
 
   const pendingPaymentRequests = currentBranchPaymentRequests.filter((request) => request.status !== 'paid');
@@ -130,9 +132,10 @@ export default function POSCashierPage() {
     );
   }
 
-  // Lấy dữ liệu bàn và đơn hiện tại
+  // Lấy dữ liệu bàn và đơn hiện tại (tổng hợp tất cả các đợt gọi món của bàn)
   const selectedTable = currentBranchTables.find((t) => t.id === selectedTableId) || currentBranchTables[0];
-  const activeOrder = currentBranchOrders.find((o) => o.id === selectedTable?.activeOrderId);
+  const activeOrder = getTableConsolidatedOrder(selectedTable?.id);
+  const tableBatches = getTableActiveOrders(selectedTable?.id);
 
   // Lọc bàn theo khu vực
   const filteredTables = currentBranchTables.filter(
@@ -342,7 +345,7 @@ export default function POSCashierPage() {
             {filteredTables.map((table) => {
               const isSelected = table.id === selectedTableId;
               const badge = getTableStatusBadge(table.status);
-              const order = currentBranchOrders.find((o) => o.id === table.activeOrderId);
+              const order = getTableConsolidatedOrder(table.id);
 
               return (
                 <div
@@ -405,8 +408,13 @@ export default function POSCashierPage() {
                   <span className="text-xl font-black text-white">{selectedTable.number}</span>
                   <span className="text-xs text-slate-400">({selectedTable.displayName})</span>
                 </div>
-                <p className="text-[11px] text-slate-500">
-                  {activeOrder ? `Mã đơn: ${activeOrder.orderCode}` : 'Bàn chưa phát sinh đơn món'}
+                <p className="text-[11px] text-slate-500 flex items-center gap-2">
+                  <span>{activeOrder ? `Mã đơn: ${activeOrder.orderCode}` : 'Bàn chưa phát sinh đơn món'}</span>
+                  {tableBatches.length > 1 && (
+                    <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-bold text-[10px]">
+                      {tableBatches.length} đợt gọi món
+                    </span>
+                  )}
                 </p>
               </div>
 
@@ -447,9 +455,14 @@ export default function POSCashierPage() {
                     className="p-2.5 rounded-2xl bg-slate-950 border border-slate-800/80 flex items-center justify-between text-xs"
                   >
                     <div>
-                      <div className="font-bold text-white flex items-center gap-1.5">
+                      <div className="font-bold text-white flex items-center gap-1.5 flex-wrap">
                         <span className="text-amber-400">{item.quantity}x</span>
                         <span>{item.name}</span>
+                        {item.batchIndex && tableBatches.length > 1 && (
+                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-amber-300 font-semibold border border-amber-500/20">
+                            Đợt {item.batchIndex}
+                          </span>
+                        )}
                       </div>
                       {item.selectedSize && <p className="text-[10px] text-slate-500">{item.selectedSize}</p>}
                       {item.note && <p className="text-[10px] text-amber-400 italic">*{item.note}</p>}

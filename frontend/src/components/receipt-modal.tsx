@@ -74,7 +74,14 @@ export function ReceiptModal({
               {order.items.map((item) => (
                 <tr key={item.id} className="text-[11px]">
                   <td className="py-1.5 pr-1">
-                    <div className="font-bold text-slate-800">{item.name}</div>
+                    <div className="font-bold text-slate-800">
+                      {item.name}
+                      {item.batchIndex && (
+                        <span className="text-[9px] font-normal text-slate-500 ml-1">
+                          (Đợt {item.batchIndex})
+                        </span>
+                      )}
+                    </div>
                     {item.selectedSize && <div className="text-[9px] text-slate-500">{item.selectedSize}</div>}
                     {item.selectedToppings && item.selectedToppings.length > 0 && (
                       <div className="text-[9px] text-slate-500">+{item.selectedToppings.join(', ')}</div>

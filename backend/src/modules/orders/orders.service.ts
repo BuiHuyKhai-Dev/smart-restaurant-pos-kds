@@ -118,6 +118,18 @@ export class OrdersService {
             lastOrderAt: now,
           },
         });
+
+        // Nếu khách từng bấm gọi thanh toán nhưng tiếp tục gọi món thêm (Round 2+)
+        // Mở lại trạng thái OPEN và hủy cờ paymentRequestedAt
+        if (session.status === SessionStatus.PAYMENT_PENDING) {
+          session = await tx.orderSession.update({
+            where: { id: session.id },
+            data: {
+              status: SessionStatus.OPEN,
+              paymentRequestedAt: null,
+            },
+          });
+        }
       }
 
       // 2. Tạo bản ghi Đơn hàng (Order)

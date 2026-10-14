@@ -60,6 +60,8 @@ export default function TableOrderPage() {
     placeOrder,
     requestPayment,
     clearPaymentRequest,
+    getTableActiveOrders,
+    getTableConsolidatedOrder,
   } = useLiveStore();
 
   const tableParam = params?.id || currentBranchTables[0]?.number || 'T-01';
@@ -129,12 +131,9 @@ export default function TableOrderPage() {
   const [callStaffNotif, setCallStaffNotif] = useState<string | null>(null);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
 
-  const activeOrder = currentBranchOrders.find(
-    (o) =>
-      (o.tableId === currentTable.id || o.tableNumber === currentTable.number || o.tableNumber === currentTable.id) &&
-      o.status !== 'completed' &&
-      o.status !== 'cancelled'
-  );
+  // Lấy đơn tổng hợp toàn bộ các đợt gọi món của bàn hiện tại
+  const activeOrder = currentTable ? getTableConsolidatedOrder(currentTable.id) : null;
+  const tableBatches = currentTable ? getTableActiveOrders(currentTable.id) : [];
 
   const paymentSuccessNotice = currentBranchPaymentRequests.find(
     (request) => request.tableId === currentTable.id && request.status === 'paid'
@@ -576,6 +575,11 @@ export default function TableOrderPage() {
                     <div>
                       <span className="text-[10px] text-slate-500 uppercase tracking-wider">Mã đơn</span>
                       <p className="font-mono font-black text-amber-400 text-lg leading-tight">{activeOrder.orderCode}</p>
+                      {tableBatches.length > 1 && (
+                        <span className="text-[10px] text-amber-300/90 font-bold block mt-0.5">
+                          Tổng hợp {tableBatches.length} đợt gọi món
+                        </span>
+                      )}
                     </div>
                     <span className={`text-[10px] px-2.5 py-1 rounded-xl font-black uppercase tracking-wide ${
                       activeOrder.status === 'pending' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
@@ -616,11 +620,16 @@ export default function TableOrderPage() {
                       return (
                         <div key={it.id} className="p-3 rounded-2xl bg-slate-950 border border-slate-800/80 flex items-start justify-between gap-3">
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="w-5 h-5 rounded-lg bg-slate-800 text-[10px] font-black text-slate-300 flex items-center justify-center shrink-0">
                                 {it.quantity}
                               </span>
                               <span className="font-bold text-xs text-white truncate">{it.name}</span>
+                              {it.batchIndex && tableBatches.length > 1 && (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-amber-300 font-semibold border border-amber-500/20">
+                                  Đợt {it.batchIndex}
+                                </span>
+                              )}
                             </div>
                             {it.selectedSize && <p className="text-[10px] text-slate-400 mt-0.5 ml-7">{it.selectedSize}</p>}
                             {it.note && <p className="text-[10px] text-amber-400 italic mt-0.5 ml-7">*{it.note}</p>}

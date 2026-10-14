@@ -9,6 +9,7 @@ import {
   InventoryAuditLog,
   Order,
   OrderItem,
+  OrderStatus,
   PaymentMethod,
   PaymentRequest,
   OrderItemStatus,
@@ -110,7 +111,7 @@ export function useLiveStore() {
 
           // Trích xuất orders từ session của bàn này
           if (activeSession?.orders && Array.isArray(activeSession.orders)) {
-            for (const o of activeSession.orders) {
+            activeSession.orders.forEach((o: any, oIdx: number) => {
               const mappedItems: OrderItem[] = (o.items || []).map((it: any) => ({
                 id: it.id,
                 menuItemId: it.productId || it.product?.id || '',
@@ -126,6 +127,8 @@ export function useLiveStore() {
                 orderedAt: it.createdAt || o.createdAt,
                 startedCookingAt: it.startedAt || undefined,
                 completedAt: it.completedAt || undefined,
+                orderCode: o.orderCode || `ORD-${o.id.slice(-4)}`,
+                batchIndex: oIdx + 1,
               }));
 
               const subtotal = mappedItems.reduce((s, item) => s + item.price * item.quantity, 0);
@@ -134,6 +137,8 @@ export function useLiveStore() {
               backendOrders.push({
                 id: o.id,
                 orderCode: o.orderCode || `ORD-${o.id.slice(-4)}`,
+                orderSessionId: activeSession.id,
+                batchIndex: oIdx + 1,
                 branchId: t.branchId,
                 tableId: t.id,
                 tableNumber: t.tableNumber,
@@ -148,7 +153,7 @@ export function useLiveStore() {
                 taxAmount,
                 finalAmount: subtotal + taxAmount,
               });
-            }
+            });
           }
 
           return {
@@ -159,7 +164,7 @@ export function useLiveStore() {
             capacity: t.capacity || 4,
             area: t.area?.toLowerCase() || 'ground',
             status: statusLower,
-            activeOrderId: activeSession?.orders?.[0]?.id || activeSession?.id,
+            activeOrderId: activeSession?.orders?.[activeSession.orders.length - 1]?.id || activeSession?.orders?.[0]?.id || activeSession?.id,
             guestCount: activeSession?.guestCount,
             seatedAt: t.seatedAt || activeSession?.openedAt,
           };
@@ -433,13 +438,24 @@ export function useLiveStore() {
       finalAmount,
     };
 
+    const existingTableOrders = state.orders.filter(
+      (o) => (o.tableId === table.id || o.tableNumber === table.number) && o.status !== 'completed' && o.status !== 'cancelled'
+    );
+    const batchIdx = existingTableOrders.length + 1;
+    newOrder.batchIndex = batchIdx;
+    newOrder.orderSessionId = existingTableOrders[0]?.orderSessionId || `session-${table.id}`;
+    newOrder.items.forEach((it) => {
+      it.batchIndex = batchIdx;
+      it.orderCode = newOrder.orderCode;
+    });
+
     const updatedTables = state.tables.map((t) =>
       t.id === table.id
         ? { ...t, status: 'occupied' as const, activeOrderId: orderId, seatedAt: t.seatedAt || now }
         : t
     );
 
-    const updatedOrders = [newOrder, ...state.orders];
+    const updatedOrders = [...state.orders, newOrder];
     saveToStorage(STORAGE_KEYS.TABLES, updatedTables);
     saveToStorage(STORAGE_KEYS.ORDERS, updatedOrders);
 
@@ -609,8 +625,14 @@ export function useLiveStore() {
         ? { ...t, status: 'available' as const, activeOrderId: undefined, seatedAt: undefined }
         : t
     );
+    const updatedOrders = state.orders.map((o) =>
+      (o.tableId === table.id || o.tableNumber === table.number) && o.status !== 'cancelled'
+        ? { ...o, status: 'completed' as const, paidAt: new Date().toISOString() }
+        : o
+    );
     saveToStorage(STORAGE_KEYS.TABLES, updatedTables);
-    setState((prev) => ({ ...prev, tables: updatedTables }));
+    saveToStorage(STORAGE_KEYS.ORDERS, updatedOrders);
+    setState((prev) => ({ ...prev, tables: updatedTables, orders: updatedOrders }));
     clearPaymentRequest(tableId);
     return null;
   };
@@ -646,6 +668,87 @@ export function useLiveStore() {
     }
   };
 
+  /** Lấy toàn bộ các đợt gọi món đang hoạt động của 1 bàn */
+  const getTableActiveOrders = useCallback(
+    (tableIdOrNumber?: string): Order[] => {
+      if (!tableIdOrNumber) return [];
+      return state.orders.filter(
+        (o) =>
+          (o.tableId === tableIdOrNumber || o.tableNumber === tableIdOrNumber) &&
+          o.status !== 'completed' &&
+          o.status !== 'cancelled'
+      );
+    },
+    [state.orders]
+  );
+
+  /**
+   * TỔNG HỢP TOÀN BỘ CÁC ĐỢT GỌI MÓN (SESSION ORDERS CONSOLIDATION)
+   * Gom toàn bộ món ăn từ Đợt 1, Đợt 2, Đợt 3... của phiên ăn bàn này
+   * Tính toán lại chính xác tổng phụ, chiết khấu, VAT và tổng thanh toán của cả bàn.
+   */
+  const getTableConsolidatedOrder = useCallback(
+    (tableIdOrNumber?: string): Order | null => {
+      if (!tableIdOrNumber) return null;
+      const tableOrders = state.orders.filter(
+        (o) =>
+          (o.tableId === tableIdOrNumber || o.tableNumber === tableIdOrNumber) &&
+          o.status !== 'completed' &&
+          o.status !== 'cancelled'
+      );
+
+      if (tableOrders.length === 0) return null;
+
+      // Sắp xếp các đợt gọi món theo thời gian tăng dần
+      const sortedOrders = [...tableOrders].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+
+      // Gom toàn bộ món ăn từ các đợt
+      const allItems: OrderItem[] = [];
+      sortedOrders.forEach((ord, ordIdx) => {
+        ord.items.forEach((it) => {
+          allItems.push({
+            ...it,
+            orderCode: it.orderCode || ord.orderCode,
+            batchIndex: it.batchIndex || ordIdx + 1,
+          });
+        });
+      });
+
+      const subtotal = allItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
+      const primaryOrder = sortedOrders[0];
+
+      // Đánh giá trạng thái chung của phiên
+      const hasUnfinished = allItems.some(
+        (it) => it.status === 'pending' || it.status === 'cooking'
+      );
+      const overallStatus: OrderStatus = hasUnfinished ? 'in_progress' : 'ready';
+
+      const discountPercent = primaryOrder.discountPercent || 0;
+      const discountAmount = Math.round((subtotal * discountPercent) / 100);
+      const taxable = subtotal - discountAmount;
+      const calculatedTax = Math.round(taxable * 0.08);
+      const finalAmount = taxable + calculatedTax;
+
+      return {
+        ...primaryOrder,
+        id: primaryOrder.orderSessionId || primaryOrder.id,
+        orderCode: sortedOrders.map((o) => o.orderCode).join(', '),
+        items: allItems,
+        status: overallStatus,
+        createdAt: primaryOrder.createdAt,
+        subtotal,
+        discountPercent,
+        discountAmount,
+        taxPercent: 8,
+        taxAmount: calculatedTax,
+        finalAmount,
+      };
+    },
+    [state.orders]
+  );
+
   // Dữ liệu lọc theo chi nhánh hiện tại
   const currentBranch = state.branches.find((b) => b.id === state.currentBranchId) || state.branches[0];
   const currentBranchTables = state.tables.filter((t) => t.branchId === state.currentBranchId);
@@ -667,6 +770,8 @@ export function useLiveStore() {
     currentBranchPaymentRequests,
     lowStockCount,
     activeOrdersCount,
+    getTableActiveOrders,
+    getTableConsolidatedOrder,
     // Actions
     setBranch,
     placeOrder,

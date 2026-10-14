@@ -38,11 +38,13 @@ export class TablesService {
             openedAt: true,
             paymentRequestedAt: true,
             orders: {
+              orderBy: { createdAt: 'asc' },
               select: {
                 id: true,
                 orderCode: true,
                 createdAt: true,
                 items: {
+                  orderBy: { createdAt: 'asc' },
                   select: {
                     id: true,
                     productId: true,
@@ -81,8 +83,10 @@ export class TablesService {
           },
           include: {
             orders: {
+              orderBy: { createdAt: 'asc' },
               include: {
                 items: {
+                  orderBy: { createdAt: 'asc' },
                   include: {
                     modifiers: {
                       include: {
