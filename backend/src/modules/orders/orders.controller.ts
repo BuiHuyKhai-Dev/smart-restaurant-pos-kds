@@ -72,6 +72,11 @@ export class OrdersController {
       }
     }
 
+    // 3. Trường hợp Khách gọi món theo bàn (Mã QR tĩnh trên bàn hoặc chế độ linh hoạt LAN/Local)
+    if (dto.tableId) {
+      return this.ordersService.placeOrder(dto, dto.tableId, { isGuest: true });
+    }
+
     throw new UnauthorizedException(
       'Vui lòng quét mã QR tại bàn hoặc đăng nhập tài khoản nhân viên để gọi món',
     );
@@ -89,6 +94,20 @@ export class OrdersController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.ordersService.updateOrderItemStatus(id, dto.status, user);
+  }
+
+  /**
+   * Bếp KDS hoàn tất toàn bộ vé order (Batch Complete)
+   * PATCH /api/orders/:id/complete-all
+   */
+  @Patch('orders/:id/complete-all')
+  @Roles(Role.ADMIN, Role.MANAGER, Role.COOK, Role.CASHIER)
+  completeOrderTicket(
+    @Param('id') id: string,
+    @Query('stationId') stationId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.ordersService.completeOrderTicket(id, stationId, user);
   }
 
   /**

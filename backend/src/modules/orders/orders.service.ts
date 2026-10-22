@@ -281,6 +281,110 @@ export class OrdersService {
     return updatedItem;
   }
 
+  /**
+   * Hoàn tất toàn bộ vé order (Batch KDS Complete)
+   * Trừ kho BOM toàn bộ các món trong 1 Transaction duy nhất và phát 1 sự kiện Batch.
+   */
+  async completeOrderTicket(
+    orderId: string,
+    stationId?: string,
+    user?: AuthUser,
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        orderSession: {
+          include: { table: true },
+        },
+        items: {
+          where: stationId
+            ? { kitchenStationId: stationId }
+            : undefined,
+          include: {
+            product: { select: { id: true, name: true } },
+            kitchenStation: { select: { id: true, name: true, color: true } },
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException(`Đơn hàng với ID ${orderId} không tồn tại`);
+    }
+
+    if (user && user.role !== Role.ADMIN) {
+      const branchId = order.orderSession.table.branchId;
+      if (user.branchId !== branchId) {
+        throw new ForbiddenException('Bạn chỉ có quyền cập nhật đơn thuộc chi nhánh của mình');
+      }
+    }
+
+    // Lọc ra các món chưa hoàn thành
+    const itemsToComplete = order.items.filter(
+      (it) =>
+        it.status !== OrderItemStatus.READY &&
+        it.status !== OrderItemStatus.SERVED &&
+        it.status !== OrderItemStatus.CANCELLED,
+    );
+
+    if (itemsToComplete.length === 0) {
+      return { success: true, message: 'Tất cả các món đã hoàn thành', items: order.items };
+    }
+
+    const itemIds = itemsToComplete.map((it) => it.id);
+
+    // 1. Trừ kho BOM theo batch trong duy nhất 1 Transaction
+    await this.inventoryService.deductInventoryForOrderItems(itemIds);
+
+    // 2. Cập nhật trạng thái tất cả các món sang READY
+    const now = new Date();
+    await this.prisma.orderItem.updateMany({
+      where: { id: { in: itemIds } },
+      data: {
+        status: OrderItemStatus.READY,
+        completedAt: now,
+      },
+    });
+
+    // Lấy lại danh sách món đã cập nhật
+    const updatedItems = await this.prisma.orderItem.findMany({
+      where: { id: { in: itemIds } },
+      include: {
+        product: { select: { id: true, name: true } },
+        kitchenStation: { select: { id: true, name: true, color: true } },
+      },
+    });
+
+    // 3. Phát sự kiện realtime
+    const branchId = order.orderSession.table.branchId;
+    const tableId = order.orderSession.table.id;
+
+    // Phát batch event cho các client
+    this.eventsGateway.emitOrderItemsBatchUpdated({
+      branchId,
+      tableId,
+      orderId: order.id,
+      items: updatedItems,
+    });
+
+    // Đồng thời phát lẻ để tương thích ngược 100%
+    for (const item of updatedItems) {
+      this.eventsGateway.emitOrderItemStatusUpdated({
+        branchId,
+        tableId,
+        stationId: item.kitchenStationId,
+        item,
+      });
+    }
+
+    return {
+      success: true,
+      orderId: order.id,
+      tableId,
+      completedItems: updatedItems,
+    };
+  }
+
   /** Lấy danh sách các món cần chế biến trên màn hình Bếp KDS */
   async getKdsItems(
     branchId: string,

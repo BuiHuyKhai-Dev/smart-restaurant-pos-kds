@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ChefHat,
@@ -27,6 +27,7 @@ export default function KitchenDisplayPage() {
     currentBranch,
     currentBranchOrders,
     updateOrderItemStatus,
+    completeOrderTicket,
   } = useLiveStore();
 
   // Hệ thống tự chia trạm (Station Routing), đầu bếp có thể chọn xem trạm hoặc toàn bộ
@@ -110,6 +111,30 @@ export default function KitchenDisplayPage() {
   const activeOrders = currentBranchOrders.filter(
     (o) => o.status !== 'completed' && o.status !== 'cancelled'
   );
+
+  // Phát âm thanh chuông báo khi có đơn mới được đẩy qua bếp
+  const prevOrderCountRef = useRef(activeOrders.length);
+  useEffect(() => {
+    if (soundEnabled && activeOrders.length > prevOrderCountRef.current) {
+      try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass) {
+          const audioCtx = new AudioContextClass();
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+          gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.6);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.6);
+        }
+      } catch {}
+    }
+    prevOrderCountRef.current = activeOrders.length;
+  }, [activeOrders.length, soundEnabled]);
 
   // Đếm số món đang chờ theo từng trạm
   const countItemsByStation = (station: KitchenStation) => {
@@ -521,12 +546,15 @@ export default function KitchenDisplayPage() {
                       </div>
                     ) : (
                       <button
-                        onClick={() => {
-                          order.items.forEach((item) => {
-                            if (item.status !== 'ready' && item.status !== 'served') {
-                              updateOrderItemStatus(order.id, item.id, 'ready');
-                            }
-                          });
+                        onClick={async () => {
+                          try {
+                            await completeOrderTicket(
+                              order.id,
+                              selectedStation !== 'all' ? selectedStation : undefined
+                            );
+                          } catch (err: any) {
+                            alert(err?.message || 'Có lỗi xảy ra khi hoàn tất vé món');
+                          }
                         }}
                         className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-emerald-600 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                       >

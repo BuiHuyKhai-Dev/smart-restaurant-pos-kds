@@ -163,6 +163,21 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       .emit('order_item:status_updated', item);
   }
 
+  /** Phát sự kiện khi Bếp hoàn tất toàn bộ vé order (Batch status updated) */
+  emitOrderItemsBatchUpdated(payload: {
+    branchId: string;
+    tableId: string;
+    orderId: string;
+    items: any[];
+  }) {
+    const { branchId, tableId, orderId, items } = payload;
+    const data = { orderId, tableId, items };
+
+    this.server.to(`table_${tableId}`).emit('order_items:batch_updated', data);
+    this.server.to(`pos_${branchId}`).emit('order_items:batch_updated', data);
+    this.server.to(`branch_${branchId}`).emit('order_items:batch_updated', data);
+  }
+
   /** Phát sự kiện khi khách bấm Gọi thanh toán tại bàn */
   emitPaymentRequested(payload: {
     branchId: string;

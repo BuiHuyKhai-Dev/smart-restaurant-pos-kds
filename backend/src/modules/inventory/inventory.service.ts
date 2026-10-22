@@ -415,5 +415,240 @@ export class InventoryService {
 
     return result;
   }
+
+  /**
+   * ĐỘNG CƠ TRỪ KHO BOM BATCH (HOÀN TẤT TOÀN BỘ VÉ KDS)
+   * Xử lý trừ kho cho toàn bộ danh sách món ăn trong 1 Transaction duy nhất.
+   * Gom định lượng nguyên liệu, khóa dòng SELECT FOR UPDATE 1 lần, chống deadlock và triệt tiêu request storm.
+   */
+  async deductInventoryForOrderItems(orderItemIds: string[]) {
+    if (!orderItemIds || orderItemIds.length === 0) {
+      return { skipped: true, reason: 'Danh sách món rỗng' };
+    }
+
+    // 1. Kiểm tra các món đã từng trừ kho chưa
+    const existingLogs = await this.prisma.inventoryAuditLog.findMany({
+      where: { orderItemId: { in: orderItemIds } },
+      select: { orderItemId: true },
+    });
+    const deductedItemIds = new Set(existingLogs.map((l) => l.orderItemId).filter(Boolean));
+
+    // Lọc ra các món chưa trừ kho
+    const targetItemIds = orderItemIds.filter((id) => !deductedItemIds.has(id));
+    if (targetItemIds.length === 0) {
+      return { skipped: true, reason: 'Toàn bộ các món đã được trừ kho trước đó' };
+    }
+
+    // 2. Lấy thông tin các món cùng chi nhánh và định lượng recipes
+    const orderItems = await this.prisma.orderItem.findMany({
+      where: { id: { in: targetItemIds } },
+      include: {
+        order: {
+          include: {
+            orderSession: {
+              include: { table: true },
+            },
+          },
+        },
+        product: {
+          include: {
+            recipes: {
+              include: { ingredient: true },
+            },
+          },
+        },
+        modifiers: {
+          include: {
+            itemModifier: {
+              include: {
+                recipes: {
+                  include: { ingredient: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (orderItems.length === 0) {
+      return { skipped: true, reason: 'Không tìm thấy món ăn hợp lệ' };
+    }
+
+    const branchId =
+      orderItems[0].order.orderSession.branchId ||
+      orderItems[0].order.orderSession.table.branchId;
+
+    // 3. Gom tổng nguyên liệu cần trừ trên toàn bộ các món trong vé
+    interface BatchIngredientUsage {
+      orderItemId: string;
+      productName: string;
+      itemQty: number;
+      amount: number;
+    }
+    interface BatchRequirement {
+      ingredientId: string;
+      name: string;
+      unit: string;
+      totalAmountNeeded: number;
+      usages: BatchIngredientUsage[];
+    }
+
+    const requirementsMap = new Map<string, BatchRequirement>();
+
+    for (const item of orderItems) {
+      const itemQty = item.quantity;
+
+      // A. Món chính
+      for (const recipe of item.product.recipes) {
+        const needed = Number(recipe.amountNeeded) * itemQty;
+        const ingId = recipe.ingredientId;
+        if (!requirementsMap.has(ingId)) {
+          requirementsMap.set(ingId, {
+            ingredientId: ingId,
+            name: recipe.ingredient.name,
+            unit: recipe.ingredient.baseUnit,
+            totalAmountNeeded: 0,
+            usages: [],
+          });
+        }
+        const req = requirementsMap.get(ingId)!;
+        req.totalAmountNeeded += needed;
+        req.usages.push({
+          orderItemId: item.id,
+          productName: item.product.name,
+          itemQty,
+          amount: needed,
+        });
+      }
+
+      // B. Modifiers
+      for (const mod of item.modifiers) {
+        const modQty = mod.quantity * itemQty;
+        for (const modRecipe of mod.itemModifier.recipes) {
+          const needed = Number(modRecipe.amountNeeded) * modQty;
+          const ingId = modRecipe.ingredientId;
+          if (!requirementsMap.has(ingId)) {
+            requirementsMap.set(ingId, {
+              ingredientId: ingId,
+              name: modRecipe.ingredient.name,
+              unit: modRecipe.ingredient.baseUnit,
+              totalAmountNeeded: 0,
+              usages: [],
+            });
+          }
+          const req = requirementsMap.get(ingId)!;
+          req.totalAmountNeeded += needed;
+          req.usages.push({
+            orderItemId: item.id,
+            productName: `${item.product.name} (+${mod.itemModifier.name})`,
+            itemQty,
+            amount: needed,
+          });
+        }
+      }
+    }
+
+    // Nếu vé không có nguyên liệu BOM nào cần trừ
+    if (requirementsMap.size === 0) {
+      return { deducted: 0, message: 'Các món trong vé không có định lượng BOM' };
+    }
+
+    // Sắp xếp ingredientId theo alphabet để chống Deadlock
+    const sortedRequirements = Array.from(requirementsMap.values()).sort((a, b) =>
+      a.ingredientId.localeCompare(b.ingredientId),
+    );
+
+    // 4. Thực thi duy nhất 1 Transaction Database với khóa dòng
+    const result = await this.prisma.$transaction(async (tx) => {
+      const deductedDetails = [];
+
+      for (const req of sortedRequirements) {
+        const rows: any[] = await tx.$queryRaw(
+          Prisma.sql`
+            SELECT id, branch_id, ingredient_id, current_stock, min_safety_stock 
+            FROM inventories 
+            WHERE branch_id = ${branchId} AND ingredient_id = ${req.ingredientId} 
+            FOR UPDATE
+          `,
+        );
+
+        if (!rows || rows.length === 0) {
+          throw new BadRequestException(
+            `Nguyên liệu "${req.name}" chưa được thiết lập kho tại chi nhánh này`,
+          );
+        }
+
+        const inv = rows[0];
+        const currentStock = Number(inv.current_stock);
+
+        if (currentStock < req.totalAmountNeeded) {
+          throw new BadRequestException(
+            `Kho không đủ nguyên liệu "${req.name}" để hoàn thành toàn bộ vé! (Hiện có: ${currentStock} ${req.unit}, Cần trừ: ${req.totalAmountNeeded} ${req.unit})`,
+          );
+        }
+
+        const newStock = currentStock - req.totalAmountNeeded;
+
+        // Cập nhật tồn kho 1 lần duy nhất cho mỗi nguyên liệu
+        await tx.inventory.update({
+          where: { id: inv.id },
+          data: {
+            currentStock: newStock,
+            updatedAt: new Date(),
+          },
+        });
+
+        // Ghi Audit Log cho từng món sử dụng nguyên liệu
+        let runningRemaining = currentStock;
+        for (const usage of req.usages) {
+          runningRemaining -= usage.amount;
+          await tx.inventoryAuditLog.create({
+            data: {
+              branchId,
+              ingredientId: req.ingredientId,
+              orderItemId: usage.orderItemId,
+              amountDeducted: usage.amount,
+              remainingStock: runningRemaining,
+              reason: `Trừ kho KDS Batch (READY) cho món ${usage.productName} (SL: ${usage.itemQty})`,
+            },
+          });
+        }
+
+        deductedDetails.push({
+          ingredientId: req.ingredientId,
+          name: req.name,
+          amountDeducted: req.totalAmountNeeded,
+          remainingStock: newStock,
+          unit: req.unit,
+          minSafetyStock: Number(inv.min_safety_stock),
+        });
+      }
+
+      return {
+        success: true,
+        orderItemIds: targetItemIds,
+        deductedDetails,
+      };
+    });
+
+    // Phát cảnh báo nguyên liệu chạm ngưỡng an toàn
+    if (result?.deductedDetails) {
+      for (const item of result.deductedDetails) {
+        if (item.remainingStock <= item.minSafetyStock) {
+          this.eventsGateway.emitLowStockAlert({
+            branchId,
+            ingredientId: item.ingredientId,
+            ingredientName: item.name,
+            currentStock: item.remainingStock,
+            minSafetyStock: item.minSafetyStock,
+            unit: item.unit,
+          });
+        }
+      }
+    }
+
+    return result;
+  }
 }
 
