@@ -606,12 +606,16 @@ export default function AdminBOMPage() {
                 Hủy
               </button>
               <button
-                onClick={() => {
-                  restockIngredient(restockModalIng.id, restockAmount);
-                  setRestockModalIng(null);
-                  alert(`Đã nhập thêm ${restockAmount} ${restockModalIng.unit} vào kho ${restockModalIng.name}!`);
+                onClick={async () => {
+                  try {
+                    await restockIngredient(restockModalIng.id, restockAmount);
+                    setRestockModalIng(null);
+                    alert(`Đã nhập thêm ${restockAmount} ${restockModalIng.unit} vào kho ${restockModalIng.name}!`);
+                  } catch (err: any) {
+                    alert(err?.message || 'Lỗi nhập kho nguyên liệu');
+                  }
                 }}
-                className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+                className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer"
               >
                 Xác Nhận Nhập
               </button>

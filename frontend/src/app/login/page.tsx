@@ -33,60 +33,102 @@ function LoginContent() {
   const { session, isReady, login, loginWithApi, logout } = useCurrentAuth();
   const { branches, currentBranchId, setBranch, currentBranch } = useLiveStore();
 
-  const [email, setEmail] = useState('cashier@smartpos.vn');
+  const [identifier, setIdentifier] = useState('cashier');
   const [password, setPassword] = useState('123456');
   const [errorMsg, setErrorMsg] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [loadingRole, setLoadingRole] = useState<string | null>(null);
+  const isLoggingIn = Boolean(loadingRole);
 
-  // Xử lý đăng nhập
-  const doLogin = async (role: UserRole, targetEmail: string, pass = '123456') => {
-    const acc = DEMO_STAFF_ACCOUNTS.find((a) => a.role === role);
-    if (!acc) return;
-
-    setIsLoggingIn(true);
-    setErrorMsg('');
-
-    try {
-      // Kết nối trực tiếp tới Backend API để lấy JWT accessToken
-      await loginWithApi(targetEmail, pass, currentBranch.name);
-      router.push(acc.targetRoute);
-    } catch (err: any) {
-      console.warn('Backend API login fallback:', err.message);
-      const staffId = `${acc.role}-${targetEmail.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-      login({
-        id: staffId,
-        name: acc.name,
-        email: targetEmail,
-        role: acc.role,
-        branchId: currentBranchId,
-        branchName: currentBranch.name,
-      });
-      router.push(acc.targetRoute);
-    } finally {
-      setIsLoggingIn(false);
-    }
+  // Định tuyến đường dẫn theo vai trò thực tế
+  const getTargetRoute = (role: string) => {
+    const r = role.toLowerCase();
+    if (r === 'cashier') return '/pos';
+    if (r === 'cook' || r === 'kitchen') return '/kds';
+    if (r === 'admin' || r === 'manager') return '/admin';
+    return '/pos';
   };
 
-  const handleFormLogin = (e: React.FormEvent) => {
+  // Điều hướng an toàn với cơ chế fallback nếu soft navigation chậm
+  const navigateTo = (route: string) => {
+    router.push(route);
+    setTimeout(() => {
+      if (typeof window !== 'undefined' && window.location.pathname === '/login') {
+        window.location.href = route;
+      }
+    }, 350);
+  };
+
+  // Xử lý đăng nhập từ Form
+  const handleFormLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
-    const foundDemo = DEMO_STAFF_ACCOUNTS.find((acc) => acc.email === email);
-    if (!foundDemo) {
-      setErrorMsg('Email không khớp với tài khoản demo nào trong hệ thống.');
+    const idClean = identifier.trim();
+    const passClean = password.trim();
+
+    if (!idClean || !passClean) {
+      setErrorMsg('Vui lòng nhập tên đăng nhập/email và mật khẩu.');
       return;
     }
-    if (password !== foundDemo.password) {
-      setErrorMsg('Mật khẩu không chính xác (Mật khẩu mặc định: 123456).');
-      return;
+
+    setLoadingRole('form');
+    const branchName = currentBranch?.name || 'Chi nhánh 1 - Quận 1 (Flagship)';
+
+    try {
+      // 1. Kết nối Backend API thực tế
+      const sessionData = await loginWithApi(idClean, passClean, branchName);
+      navigateTo(getTargetRoute(sessionData.role));
+    } catch (apiErr: any) {
+      console.warn('Backend API login error:', apiErr?.message);
+
+      // 2. Fallback nếu Backend chưa bật hoặc offline: Thử tìm trong DEMO_STAFF_ACCOUNTS
+      const foundDemo = DEMO_STAFF_ACCOUNTS.find(
+        (acc) =>
+          acc.email.toLowerCase() === idClean.toLowerCase() ||
+          acc.email.split('@')[0].toLowerCase() === idClean.toLowerCase()
+      );
+
+      if (foundDemo && passClean === foundDemo.password) {
+        login({
+          id: `${foundDemo.role}-${foundDemo.email.split('@')[0]}`,
+          name: foundDemo.name,
+          email: foundDemo.email,
+          role: foundDemo.role,
+          branchId: currentBranchId || 'branch-1',
+          branchName,
+        });
+        navigateTo(foundDemo.targetRoute);
+      } else {
+        setErrorMsg(apiErr?.message || 'Tên đăng nhập hoặc mật khẩu không chính xác.');
+        setLoadingRole(null);
+      }
     }
-    doLogin(foundDemo.role, email, password);
   };
 
-  const handleQuickLogin = (role: UserRole) => {
+  // Xử lý 1-Click Fast Login
+  const handleQuickLogin = async (role: UserRole) => {
     const acc = DEMO_STAFF_ACCOUNTS.find((a) => a.role === role);
     if (!acc) return;
-    doLogin(acc.role, acc.email, acc.password);
+
+    setLoadingRole(role);
+    setErrorMsg('');
+    const branchName = currentBranch?.name || 'Chi nhánh 1 - Quận 1 (Flagship)';
+
+    try {
+      const sessionData = await loginWithApi(acc.email, acc.password, branchName);
+      navigateTo(getTargetRoute(sessionData.role));
+    } catch (err: any) {
+      console.warn('Backend API quick login fallback:', err?.message);
+      login({
+        id: `${acc.role}-${acc.email.split('@')[0]}`,
+        name: acc.name,
+        email: acc.email,
+        role: acc.role,
+        branchId: currentBranchId || 'branch-1',
+        branchName,
+      });
+      navigateTo(acc.targetRoute);
+    }
   };
 
   const roleIcons = {
@@ -262,10 +304,19 @@ function LoginContent() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0 ml-2">
-                      <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-lg ${colors.badge}`}>
-                        {routeBadge[acc.role]}
-                      </span>
-                      <ArrowRight className={`w-4 h-4 text-slate-600 ${colors.arrow} group-hover:translate-x-0.5 transition-all`} />
+                      {loadingRole === acc.role ? (
+                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-400 text-[10px] font-bold">
+                          <div className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                          <span>Đang vào...</span>
+                        </div>
+                      ) : (
+                        <>
+                          <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-lg ${colors.badge}`}>
+                            {routeBadge[acc.role]}
+                          </span>
+                          <ArrowRight className={`w-4 h-4 text-slate-600 ${colors.arrow} group-hover:translate-x-0.5 transition-all`} />
+                        </>
+                      )}
                     </div>
                   </button>
                 );
@@ -294,15 +345,16 @@ function LoginContent() {
 
             <div>
               <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-                Email Đăng Nhập
+                Tên Đăng Nhập hoặc Email
               </label>
               <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="cashier@smartpos.vn"
+                type="text"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                placeholder="cashier hoặc cashier@smartpos.vn"
                 className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-amber-500 transition-colors"
                 required
+                autoComplete="username"
               />
             </div>
 

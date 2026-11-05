@@ -71,7 +71,7 @@ export class TablesService {
   }
 
   async findOne(id: string) {
-    const table = await this.prisma.table.findUnique({
+    let table = await this.prisma.table.findUnique({
       where: { id },
       include: {
         branch: {
@@ -101,6 +101,39 @@ export class TablesService {
         },
       },
     });
+
+    if (!table) {
+      table = await this.prisma.table.findFirst({
+        where: { tableNumber: id },
+        include: {
+          branch: {
+            select: { id: true, name: true, address: true, phoneNumber: true },
+          },
+          orderSessions: {
+            where: {
+              status: { in: [SessionStatus.OPEN, SessionStatus.PAYMENT_PENDING] },
+            },
+            include: {
+              orders: {
+                orderBy: { createdAt: 'asc' },
+                include: {
+                  items: {
+                    orderBy: { createdAt: 'asc' },
+                    include: {
+                      modifiers: {
+                        include: {
+                          itemModifier: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+    }
 
     if (!table) {
       throw new NotFoundException(`Không tìm thấy bàn với ID ${id}`);
@@ -187,7 +220,7 @@ export class TablesService {
         toTable: updatedToTable,
         orderSession: updatedSession,
       };
-    });
+    }, { maxWait: 10000, timeout: 25000 });
   }
 
   async mergeTable(dto: MergeTableDto, user: AuthUser) {
@@ -287,7 +320,7 @@ export class TablesService {
         toTable: updatedToTable,
         targetSessionId: toSession.id,
       };
-    });
+    }, { maxWait: 10000, timeout: 25000 });
   }
 
   async updateStatus(id: string, dto: UpdateTableStatusDto, user: AuthUser) {
@@ -317,7 +350,7 @@ export class TablesService {
   }
 
   async requestPayment(tableId: string) {
-    const table = await this.prisma.table.findUnique({
+    let table = await this.prisma.table.findUnique({
       where: { id: tableId },
       include: {
         orderSessions: {
@@ -327,6 +360,19 @@ export class TablesService {
         },
       },
     });
+
+    if (!table) {
+      table = await this.prisma.table.findFirst({
+        where: { tableNumber: tableId },
+        include: {
+          orderSessions: {
+            where: { status: { in: [SessionStatus.OPEN, SessionStatus.PAYMENT_PENDING] } },
+            orderBy: { openedAt: 'desc' },
+            take: 1,
+          },
+        },
+      });
+    }
 
     if (!table) throw new NotFoundException('Không tìm thấy bàn');
 

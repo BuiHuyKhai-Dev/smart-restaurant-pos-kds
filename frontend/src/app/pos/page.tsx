@@ -1,27 +1,27 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { ReceiptModal } from '@/components/receipt-modal';
+import { TableQRModal } from '@/components/table-qr-modal';
+import { VietQRModal } from '@/components/vietqr-modal';
+import { useCurrentAuth } from '@/lib/auth-store';
+import { useLiveStore } from '@/lib/live-store';
+import { TableArea, TableStatus } from '@/lib/types';
 import {
+  ArrowRightLeft,
+  Banknote,
+  Clock,
+  LogOut,
+  Merge,
   Monitor,
   Plus,
-  ArrowRightLeft,
-  Merge,
   Printer,
-  Banknote,
   QrCode,
-  Clock,
+  ShoppingBag,
   User,
   X,
-  ShoppingBag,
-  LogOut,
 } from 'lucide-react';
-import { useLiveStore } from '@/lib/live-store';
-import { useCurrentAuth } from '@/lib/auth-store';
-import { TableArea, TableStatus } from '@/lib/types';
-import { ReceiptModal } from '@/components/receipt-modal';
-import { VietQRModal } from '@/components/vietqr-modal';
-import { TableQRModal } from '@/components/table-qr-modal';
+import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
 
 export default function POSCashierPage() {
   const router = useRouter();
@@ -45,6 +45,13 @@ export default function POSCashierPage() {
   // Bàn đang chọn
   const [selectedTableId, setSelectedTableId] = useState<string>(currentBranchTables[0]?.id || '');
   const [selectedArea, setSelectedArea] = useState<TableArea | 'all'>('all');
+
+  // Tự động đồng bộ bàn được chọn khi chuyển chi nhánh hoặc danh sách bàn nạp xong
+  useEffect(() => {
+    if (currentBranchTables.length > 0 && !currentBranchTables.some((t) => t.id === selectedTableId)) {
+      setSelectedTableId(currentBranchTables[0].id);
+    }
+  }, [currentBranchTables, selectedTableId]);
 
   // Modals
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
@@ -165,12 +172,16 @@ export default function POSCashierPage() {
   const changeDue = Math.max(0, cashGiven - finalAmount);
 
   // Xử lý thanh toán hoàn tất
-  const handleCompletePayment = (method: 'cash' | 'vietqr' | 'card') => {
+  const handleCompletePayment = async (method: 'cash' | 'vietqr' | 'card') => {
     if (!selectedTable) return;
-    processPayment(selectedTable.id, method, discountPercent, method === 'cash' ? cashGiven : undefined);
-    setIsCashModalOpen(false);
-    setIsVietQROpen(false);
-    alert(`✅ Đã thanh toán thành công cho Bàn ${selectedTable.number}! Bàn đã được giải phóng.`);
+    try {
+      await processPayment(selectedTable.id, method, discountPercent, method === 'cash' ? cashGiven : undefined);
+      setIsCashModalOpen(false);
+      setIsVietQROpen(false);
+      alert(`✅ Đã thanh toán thành công cho Bàn ${selectedTable?.number || ''}! Bàn đã được giải phóng.`);
+    } catch (err: any) {
+      alert(err.message || 'Lỗi xử lý thanh toán');
+    }
   };
 
   return (
@@ -405,8 +416,8 @@ export default function POSCashierPage() {
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="text-xl font-black text-white">{selectedTable.number}</span>
-                  <span className="text-xs text-slate-400">({selectedTable.displayName})</span>
+                  <span className="text-xl font-black text-white">{selectedTable?.number || '---'}</span>
+                  <span className="text-xs text-slate-400">({selectedTable?.displayName || 'Chưa chọn bàn'})</span>
                 </div>
                 <p className="text-[11px] text-slate-500 flex items-center gap-2">
                   <span>{activeOrder ? `Mã đơn: ${activeOrder.orderCode}` : 'Bàn chưa phát sinh đơn món'}</span>
@@ -421,16 +432,22 @@ export default function POSCashierPage() {
               {/* Nút thao tác của bàn */}
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setIsTableQROpen(true)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold text-xs border border-amber-500/30 transition-colors cursor-pointer shadow-sm"
+                  onClick={() => {
+                    if (selectedTable) setIsTableQROpen(true);
+                  }}
+                  disabled={!selectedTable}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-amber-400 font-bold text-xs border border-amber-500/30 transition-colors cursor-pointer shadow-sm"
                   title="Hiển thị mã QR của bàn để khách quét"
                 >
                   <QrCode className="w-3.5 h-3.5" />
                   <span>Mã QR Bàn</span>
                 </button>
                 <button
-                  onClick={() => setIsAddDishModalOpen(true)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md transition-colors cursor-pointer"
+                  onClick={() => {
+                    if (selectedTable) setIsAddDishModalOpen(true);
+                  }}
+                  disabled={!selectedTable}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-xs shadow-md transition-colors cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Thêm Món</span>
@@ -645,7 +662,7 @@ export default function POSCashierPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-5 max-h-[85vh] flex flex-col shadow-2xl">
             <div className="flex justify-between items-center pb-3 border-b border-slate-800 mb-3">
-              <h3 className="font-bold text-sm text-white">Thêm Món Vào Bàn {selectedTable.number}</h3>
+              <h3 className="font-bold text-sm text-white">Thêm Món Vào Bàn {selectedTable?.number || ''}</h3>
               <button onClick={() => setIsAddDishModalOpen(false)} className="text-slate-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
@@ -662,9 +679,14 @@ export default function POSCashierPage() {
                     <p className="text-[10px] text-amber-400">{dish.price.toLocaleString('vi-VN')} đ</p>
                   </div>
                   <button
-                    onClick={() => {
-                      addItemsToOrder(selectedTable.id, [{ menuItemId: dish.id, quantity: 1 }]);
-                      alert(`Đã thêm 1 suất ${dish.name} vào Bàn ${selectedTable.number}!`);
+                    onClick={async () => {
+                      if (!selectedTable) return;
+                      try {
+                        await addItemsToOrder(selectedTable.id, [{ menuItemId: dish.id, quantity: 1 }]);
+                        alert(`Đã thêm 1 suất ${dish.name} vào Bàn ${selectedTable.number}!`);
+                      } catch (err: any) {
+                        alert(err?.message || 'Lỗi thêm món vào bàn');
+                      }
                     }}
                     className="px-3 py-1.5 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs hover:bg-amber-400 cursor-pointer"
                   >
@@ -692,7 +714,7 @@ export default function POSCashierPage() {
               {tableActionType === 'change' ? 'Chuyển Bàn Ăn' : 'Gộp Bàn Ăn'}
             </h3>
             <p className="text-xs text-slate-400 mb-4">
-              Từ Bàn: <strong className="text-amber-400">{selectedTable.number}</strong>
+              Từ Bàn: <strong className="text-amber-400">{selectedTable?.number || '---'}</strong>
             </p>
 
             <div className="mb-4">
@@ -704,7 +726,7 @@ export default function POSCashierPage() {
               >
                 <option value="">-- Chọn bàn đích --</option>
                 {currentBranchTables
-                  .filter((t) => t.id !== selectedTable.id)
+                  .filter((t) => !selectedTable || t.id !== selectedTable.id)
                   .map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.number} - {t.displayName} ({t.status === 'available' ? 'Trống' : 'Có khách'})
@@ -721,14 +743,19 @@ export default function POSCashierPage() {
                 Hủy
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
+                  if (!selectedTable) return;
                   if (!targetTableId) {
                     alert('Vui lòng chọn bàn đích!');
                     return;
                   }
-                  changeOrMergeTable(selectedTable.id, targetTableId, tableActionType);
-                  setIsChangeTableModalOpen(false);
-                  alert(`Đã ${tableActionType === 'change' ? 'chuyển' : 'gộp'} bàn thành công!`);
+                  try {
+                    await changeOrMergeTable(selectedTable.id, targetTableId, tableActionType);
+                    setIsChangeTableModalOpen(false);
+                    alert(`Đã ${tableActionType === 'change' ? 'chuyển' : 'gộp'} bàn thành công!`);
+                  } catch (err: any) {
+                    alert(err?.message || `Lỗi ${tableActionType === 'change' ? 'chuyển' : 'gộp'} bàn`);
+                  }
                 }}
                 className="flex-1 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold"
               >
@@ -743,9 +770,9 @@ export default function POSCashierPage() {
       <TableQRModal
         isOpen={isTableQROpen}
         onClose={() => setIsTableQROpen(false)}
-        tableId={selectedTable.id}
-        tableNumber={selectedTable.number}
-        tableName={selectedTable.displayName}
+        tableId={selectedTable?.id || ''}
+        tableNumber={selectedTable?.number || ''}
+        tableName={selectedTable?.displayName || ''}
       />
     </div>
   );

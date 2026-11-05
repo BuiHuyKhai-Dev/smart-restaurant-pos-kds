@@ -1,22 +1,22 @@
 import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
+    BadRequestException,
+    ForbiddenException,
+    Injectable,
+    NotFoundException,
 } from '@nestjs/common';
 import {
-  OrderItemStatus,
-  PaymentMethod,
-  PaymentStatus,
-  Role,
-  SessionStatus,
-  TableStatus,
+    OrderItemStatus,
+    PaymentMethod,
+    PaymentStatus,
+    Role,
+    SessionStatus,
+    TableStatus,
 } from '@prisma/client';
-import { PrismaService } from '../../prisma/prisma.service';
 import type { AuthUser } from '../../common/interfaces/auth.interface';
+import { PrismaService } from '../../prisma/prisma.service';
+import { EventsGateway } from '../events/events.gateway';
 import { CreateProvisionalInvoiceDto } from './dto/create-provisional-invoice.dto';
 import { SettleInvoiceDto } from './dto/settle-invoice.dto';
-import { EventsGateway } from '../events/events.gateway';
 
 @Injectable()
 export class InvoicesService {
@@ -30,10 +30,17 @@ export class InvoicesService {
     dto: CreateProvisionalInvoiceDto,
     user?: AuthUser,
   ) {
-    const table = await this.prisma.table.findUnique({
+    let table = await this.prisma.table.findUnique({
       where: { id: dto.tableId },
       include: { branch: true },
     });
+
+    if (!table) {
+      table = await this.prisma.table.findFirst({
+        where: { tableNumber: dto.tableId },
+        include: { branch: true },
+      });
+    }
 
     if (!table) {
       throw new NotFoundException(`Bàn ăn với ID ${dto.tableId} không tồn tại`);
@@ -277,7 +284,7 @@ export class InvoicesService {
       });
 
       return { updatedInvoice, releasedTable };
-    });
+    }, { maxWait: 10000, timeout: 25000 });
 
     // Phát sự kiện Realtime cập nhật bàn và báo thanh toán hoàn tất
     this.eventsGateway.emitTableUpdated({

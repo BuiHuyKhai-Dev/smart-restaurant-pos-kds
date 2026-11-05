@@ -30,10 +30,17 @@ export class OrdersService {
     tableId: string,
     caller?: { isGuest: boolean; user?: AuthUser },
   ) {
-    const table = await this.prisma.table.findUnique({
+    let table = await this.prisma.table.findUnique({
       where: { id: tableId },
       include: { branch: true },
     });
+
+    if (!table) {
+      table = await this.prisma.table.findFirst({
+        where: { tableNumber: tableId },
+        include: { branch: true },
+      });
+    }
 
     if (!table) {
       throw new NotFoundException(`Bàn ăn với ID ${tableId} không tồn tại`);
@@ -132,51 +139,41 @@ export class OrdersService {
         }
       }
 
-      // 2. Tạo bản ghi Đơn hàng (Order)
+      // 2. Tạo bản ghi Đơn hàng (Order) kèm OrderItems & Modifiers trong 1 query
       const order = await tx.order.create({
         data: {
           orderSessionId: session.id,
           orderCode,
           note: dto.note,
-        },
-      });
-
-      // 3. Tạo các món ăn trong đơn (OrderItems) kèm Modifiers
-      for (const item of dto.items) {
-        const prod = productMap.get(item.productId)!;
-
-        const orderItem = await tx.orderItem.create({
-          data: {
-            orderId: order.id,
-            productId: prod.id,
-            kitchenStationId: prod.kitchenStationId,
-            price: prod.price,
-            quantity: item.quantity,
-            note: item.note,
-            status: OrderItemStatus.PENDING,
+          items: {
+            create: dto.items.map((item) => {
+              const prod = productMap.get(item.productId)!;
+              return {
+                productId: prod.id,
+                kitchenStationId: prod.kitchenStationId,
+                price: prod.price,
+                quantity: item.quantity,
+                note: item.note,
+                status: OrderItemStatus.PENDING,
+                modifiers:
+                  item.modifierIds && item.modifierIds.length > 0
+                    ? {
+                        create: item.modifierIds
+                          .filter((modId) => modifierMap.has(modId))
+                          .map((modId) => {
+                            const mod = modifierMap.get(modId)!;
+                            return {
+                              itemModifierId: mod.id,
+                              extraPrice: mod.extraPrice,
+                              quantity: 1,
+                            };
+                          }),
+                      }
+                    : undefined,
+              };
+            }),
           },
-        });
-
-        if (item.modifierIds && item.modifierIds.length > 0) {
-          for (const modId of item.modifierIds) {
-            const mod = modifierMap.get(modId);
-            if (mod) {
-              await tx.orderItemModifier.create({
-                data: {
-                  orderItemId: orderItem.id,
-                  itemModifierId: mod.id,
-                  extraPrice: mod.extraPrice,
-                  quantity: 1,
-                },
-              });
-            }
-          }
-        }
-      }
-
-      // 4. Trả về chi tiết đơn hàng vừa đặt
-      return tx.order.findUnique({
-        where: { id: order.id },
+        },
         include: {
           items: {
             include: {
@@ -191,7 +188,10 @@ export class OrdersService {
           },
         },
       });
-    });
+
+      return order;
+    },
+    { maxWait: 10000, timeout: 25000 });
 
     // Phát sự kiện realtime tới Bếp KDS, POS và Khách tại bàn
     this.eventsGateway.emitOrderPlaced({
@@ -443,10 +443,17 @@ export class OrdersService {
 
   /** Lấy toàn bộ đơn và tính tiền tạm tính cho phiên ăn hiện tại của bàn */
   async getCurrentSessionByTable(tableId: string) {
-    const table = await this.prisma.table.findUnique({
+    let table = await this.prisma.table.findUnique({
       where: { id: tableId },
       include: { branch: true },
     });
+
+    if (!table) {
+      table = await this.prisma.table.findFirst({
+        where: { tableNumber: tableId },
+        include: { branch: true },
+      });
+    }
 
     if (!table) {
       throw new NotFoundException(`Bàn ăn với ID ${tableId} không tồn tại`);

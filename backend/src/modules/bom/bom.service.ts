@@ -82,7 +82,7 @@ export class BomService {
           unit: r.ingredient.baseUnit,
         })),
       };
-    });
+    }, { maxWait: 10000, timeout: 25000 });
   }
 
   /** Lấy công thức định lượng của modifier/topping */
@@ -160,7 +160,7 @@ export class BomService {
           unit: r.ingredient.baseUnit,
         })),
       };
-    });
+    }, { maxWait: 10000, timeout: 25000 });
   }
 }
 

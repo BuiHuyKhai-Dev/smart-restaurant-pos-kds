@@ -617,7 +617,10 @@ export const useLiveStoreBase = create<LiveStoreState>((set, get) => ({
         return res.data;
       }
     } catch (err: any) {
-      console.warn('Lỗi gọi API đặt món, chuyển sang fallback:', err.message);
+      console.warn('Lỗi gọi API đặt món:', err.message);
+      if (get().isBackendConnected && err.status && err.status >= 400 && err.status < 500) {
+        throw err;
+      }
     }
 
     // Fallback Offline
@@ -807,6 +810,7 @@ export const useLiveStoreBase = create<LiveStoreState>((set, get) => ({
       get().fetchTablesOnly(get().currentBranchId);
     } catch (err: any) {
       console.warn('Lỗi chuyển/gộp bàn từ backend:', err.message);
+      throw err;
     }
   },
 
@@ -913,6 +917,7 @@ export const useLiveStoreBase = create<LiveStoreState>((set, get) => ({
       get().fetchBackendData(get().currentBranchId);
     } catch (err: any) {
       console.warn('Lỗi restock backend:', err.message);
+      throw err;
     }
   },
 
@@ -927,6 +932,7 @@ export const useLiveStoreBase = create<LiveStoreState>((set, get) => ({
       get().fetchBackendData(get().currentBranchId);
     } catch (err: any) {
       console.warn('Lỗi cập nhật BOM backend:', err.message);
+      throw err;
     }
   },
 }));

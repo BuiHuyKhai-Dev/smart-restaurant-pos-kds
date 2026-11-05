@@ -73,8 +73,8 @@ export class OrdersController {
         };
         return this.ordersService.placeOrder(dto, dto.tableId, { isGuest: false, user });
       } catch (e) {
-        if (e instanceof UnauthorizedException) throw e;
-        throw new UnauthorizedException('Phiên đăng nhập nhân viên không hợp lệ');
+        if (e instanceof UnauthorizedException && !dto.tableId) throw e;
+        // Nếu token hết hạn nhưng có tableId (ví dụ khách mở trên máy từng test nhân viên), tiếp tục với chế độ đặt món theo bàn
       }
     }
 

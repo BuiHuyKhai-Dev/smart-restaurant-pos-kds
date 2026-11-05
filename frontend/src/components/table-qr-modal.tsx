@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import QRCode from 'react-qr-code';
-import { QrCode, X, Copy, ExternalLink, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { apiClient } from '@/lib/api-client';
+import { CheckCircle2, Copy, ExternalLink, QrCode, RefreshCw, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import QRCode from 'react-qr-code';
 
 interface TableQRModalProps {
   isOpen: boolean;
@@ -136,10 +136,13 @@ export function TableQRModal({
             </button>
 
             <a
-              href={qrUrl}
+              href={qrUrl || '#'}
               target="_blank"
               rel="noopener noreferrer"
-              className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-amber-500/20 transition-all"
+              onClick={(e) => {
+                if (!qrUrl) e.preventDefault();
+              }}
+              className={`py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-amber-500/20 transition-all ${!qrUrl ? 'pointer-events-none opacity-50' : 'cursor-pointer'}`}
             >
               <ExternalLink className="w-3.5 h-3.5" />
               <span>Mở trang khách</span>

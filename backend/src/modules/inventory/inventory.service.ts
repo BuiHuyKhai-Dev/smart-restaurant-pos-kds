@@ -176,7 +176,7 @@ export class InventoryService {
         branchId: dto.branchId,
         restockedItems: results,
       };
-    });
+    }, { maxWait: 10000, timeout: 25000 });
   }
 
   /** Cập nhật mức tồn kho an toàn */
@@ -395,7 +395,7 @@ export class InventoryService {
         productName: orderItem.product.name,
         deductedDetails,
       };
-    });
+    }, { maxWait: 10000, timeout: 25000 });
 
     // Phát cảnh báo nguyên liệu chạm ngưỡng đỏ/vàng
     if (result?.deductedDetails) {
@@ -630,7 +630,7 @@ export class InventoryService {
         orderItemIds: targetItemIds,
         deductedDetails,
       };
-    });
+    }, { maxWait: 10000, timeout: 25000 });
 
     // Phát cảnh báo nguyên liệu chạm ngưỡng an toàn
     if (result?.deductedDetails) {

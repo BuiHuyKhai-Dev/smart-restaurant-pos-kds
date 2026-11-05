@@ -128,6 +128,7 @@ export default function TableOrderPage() {
   }>>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [orderPlacedSuccess, setOrderPlacedSuccess] = useState(false);
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [callStaffNotif, setCallStaffNotif] = useState<string | null>(null);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
 
@@ -195,36 +196,47 @@ export default function TableOrderPage() {
   const cartFinal = cartSubtotal + cartVAT;
   const totalCartCount = cart.reduce((sum, it) => sum + it.quantity, 0);
 
-  const handleConfirmOrder = () => {
-    if (cart.length === 0) return;
-    placeOrder({
-      tableId: currentTable.id,
-      guestCount: currentTable.guestCount || 2,
-      tableToken: guestToken || undefined,
-      items: cart.map((c) => ({
-        menuItemId: c.menuItem.id,
-        quantity: c.quantity,
-        selectedSize: c.selectedSize,
-        selectedSpicyLevel: c.selectedSpicy,
-        selectedToppings: c.selectedToppings,
-        note: c.note,
-      })),
-    });
-    setCart([]);
-    setIsCartOpen(false);
-    setOrderPlacedSuccess(true);
-    setActiveTab('order_status');
-    setTimeout(() => setOrderPlacedSuccess(false), 5000);
+  const handleConfirmOrder = async () => {
+    if (cart.length === 0 || isSubmittingOrder) return;
+    setIsSubmittingOrder(true);
+    try {
+      await placeOrder({
+        tableId: currentTable.id,
+        guestCount: currentTable.guestCount || 2,
+        tableToken: guestToken || undefined,
+        items: cart.map((c) => ({
+          menuItemId: c.menuItem.id,
+          quantity: c.quantity,
+          selectedSize: c.selectedSize,
+          selectedSpicyLevel: c.selectedSpicy,
+          selectedToppings: c.selectedToppings,
+          note: c.note,
+        })),
+      });
+      setCart([]);
+      setIsCartOpen(false);
+      setOrderPlacedSuccess(true);
+      setActiveTab('order_status');
+      setTimeout(() => setOrderPlacedSuccess(false), 5000);
+    } catch (err: any) {
+      alert(err?.message || 'Có lỗi khi gửi đơn hàng vào bếp, vui lòng thử lại!');
+    } finally {
+      setIsSubmittingOrder(false);
+    }
   };
 
-  const handleCallStaff = (type: 'staff' | 'bill') => {
+  const handleCallStaff = async (type: 'staff' | 'bill') => {
     if (type === 'bill') {
       if (!canRequestPayment) {
         setCallStaffNotif(`⏳ Đơn hàng chưa hoàn tất. Vui lòng chờ tất cả món sẵn sàng trước khi thanh toán.`);
         setTimeout(() => setCallStaffNotif(null), 4000);
         return;
       }
-      requestPayment(currentTable.id);
+      try {
+        await requestPayment(currentTable.id);
+      } catch (err: any) {
+        console.warn('Lỗi gọi thanh toán:', err);
+      }
     }
 
     const msg =
@@ -939,10 +951,11 @@ export default function TableOrderPage() {
 
             <button
               onClick={handleConfirmOrder}
-              className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 active:scale-[0.98] text-slate-950 font-black text-sm shadow-xl shadow-amber-500/25 transition-all flex items-center justify-center gap-2"
+              disabled={isSubmittingOrder}
+              className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:opacity-50 active:scale-[0.98] text-slate-950 font-black text-sm shadow-xl shadow-amber-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
               <ChefHat className="w-5 h-5" />
-              <span>GỬI ĐƠN VÀO BẾP</span>
+              <span>{isSubmittingOrder ? 'ĐANG GỬI VÀO BẾP...' : 'GỬI ĐƠN VÀO BẾP'}</span>
             </button>
           </div>
         </div>

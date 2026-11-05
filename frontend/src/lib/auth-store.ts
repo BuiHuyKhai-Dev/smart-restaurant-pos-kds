@@ -152,6 +152,8 @@ export const useAuthStore = create<AuthState>()(
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.setHydrated(true);
+        } else {
+          useAuthStore.getState().setHydrated(true);
         }
       },
     }
@@ -160,17 +162,20 @@ export const useAuthStore = create<AuthState>()(
 
 export function useCurrentAuth() {
   const store = useAuthStore();
-  const [isReady, setIsReady] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
-    setIsReady(true);
-  }, []);
+    setIsMounted(true);
+    if (!store.hasHydrated) {
+      store.setHydrated(true);
+    }
+  }, [store]);
 
   return {
     session: store.session,
     token: store.token,
     isAuthenticated: !!store.session,
-    isReady: isReady && store.hasHydrated,
+    isReady: isMounted,
     login: store.login,
     loginWithApi: store.loginWithApi,
     logout: store.logout,
