@@ -7,6 +7,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import { Public } from '../../common/decorators/public.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -16,11 +17,13 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { ToggleAvailabilityDto } from './dto/toggle-availability.dto';
 import { CreateCategoryDto } from './dto/create-category.dto';
 
+@ApiTags('3. Menu (Thực đơn & Trạm bếp)')
 @Controller('menu')
 export class MenuController {
   constructor(private readonly menuService: MenuService) {}
 
   /** Lấy toàn bộ thực đơn kèm options/toppings (Hỗ trợ lọc category, station, search, onlyAvailable) */
+  @ApiOperation({ summary: 'Lấy toàn bộ thực đơn kèm giá, trạm bếp và tùy chọn Topping' })
   @Public()
   @Get()
   getMenu(
@@ -34,6 +37,7 @@ export class MenuController {
   }
 
   /** Lấy danh sách danh mục món ăn */
+  @ApiOperation({ summary: 'Danh sách các danh mục món ăn' })
   @Public()
   @Get('categories')
   getCategories() {
@@ -41,6 +45,7 @@ export class MenuController {
   }
 
   /** Lấy danh sách trạm bếp KDS */
+  @ApiOperation({ summary: 'Danh sách các trạm bếp KDS (Bếp Nóng, Bếp Lạnh, Pha Chế)' })
   @Public()
   @Get('stations')
   getStations() {
@@ -48,6 +53,7 @@ export class MenuController {
   }
 
   /** Lấy chi tiết 1 món ăn */
+  @ApiOperation({ summary: 'Chi tiết thông tin 1 món ăn' })
   @Public()
   @Get('products/:id')
   getProduct(@Param('id') id: string) {
@@ -55,6 +61,8 @@ export class MenuController {
   }
 
   /** Thêm món ăn mới (Admin & Quản lý) */
+  @ApiOperation({ summary: 'Thêm món ăn mới vào thực đơn' })
+  @ApiBearerAuth('JWT-auth')
   @Post('products')
   @Roles(Role.ADMIN, Role.MANAGER)
   createProduct(@Body() dto: CreateProductDto) {
@@ -62,6 +70,8 @@ export class MenuController {
   }
 
   /** Cập nhật thông tin món ăn (Admin & Quản lý) */
+  @ApiOperation({ summary: 'Cập nhật thông tin món ăn' })
+  @ApiBearerAuth('JWT-auth')
   @Patch('products/:id')
   @Roles(Role.ADMIN, Role.MANAGER)
   updateProduct(
@@ -72,6 +82,8 @@ export class MenuController {
   }
 
   /** Bật/tắt trạng thái mở bán món ăn (Bếp/Thu ngân/Quản lý) */
+  @ApiOperation({ summary: 'Bật/tắt mở bán món ăn (Báo hết món tức thì)' })
+  @ApiBearerAuth('JWT-auth')
   @Patch('products/:id/availability')
   @Roles(Role.ADMIN, Role.MANAGER, Role.CASHIER, Role.COOK)
   toggleAvailability(
@@ -82,10 +94,11 @@ export class MenuController {
   }
 
   /** Tạo danh mục món ăn mới (Admin) */
+  @ApiOperation({ summary: 'Tạo danh mục món ăn mới' })
+  @ApiBearerAuth('JWT-auth')
   @Post('categories')
   @Roles(Role.ADMIN)
   createCategory(@Body() dto: CreateCategoryDto) {
     return this.menuService.createCategory(dto);
   }
 }
-

@@ -1,0 +1,158 @@
+{
+  "info": {
+    "name": "Smart Restaurant POS & KDS - Core API Collection",
+    "description": "Bộ sưu tập API cốt lõi phục vụ minh chứng Báo cáo Tiến độ Lần 2 (Tuần 09)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000/api"
+    },
+    {
+      "key": "jwtToken",
+      "value": ""
+    },
+    {
+      "key": "tableToken",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Auth (Xác thực & Phân quyền)",
+      "item": [
+        {
+          "name": "[200 OK] Đăng nhập Thu Ngân hợp lệ (POST /auth/login)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"cashier\",\n  \"password\": \"123456\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login"
+          }
+        },
+        {
+          "name": "[401 Lỗi] Đăng nhập sai mật khẩu (POST /auth/login)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"cashier\",\n  \"password\": \"sai_mat_khau_123\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Tables & QR Security (Sơ đồ bàn & Mã QR)",
+      "item": [
+        {
+          "name": "[200 OK] Lấy sơ đồ bàn Chi nhánh 1 (GET /tables)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/tables?branchId=branch-1"
+          }
+        },
+        {
+          "name": "[200 OK] Cấp phát / Xoay vòng mã QR Bàn 1 (POST /tables/tbl-1/qr)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{jwtToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rotate\": true\n}"
+            },
+            "url": "{{baseUrl}}/tables/tbl-1/qr"
+          }
+        },
+        {
+          "name": "[401 Lỗi] Khách quét mã QR giả mạo (GET /table-access/me)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "x-table-token", "value": "token_gia_mao_khong_hop_le" }
+            ],
+            "url": "{{baseUrl}}/table-access/me"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Orders & KDS (Đặt món & Trừ kho BOM)",
+      "item": [
+        {
+          "name": "[201 Created] Đặt món mới cho Bàn 1 (POST /orders)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{jwtToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tableId\": \"tbl-1\",\n  \"guestCount\": 4,\n  \"note\": \"Ít hành, mang ra cùng lúc\",\n  \"items\": [\n    {\n      \"productId\": \"menu-2\",\n      \"quantity\": 2,\n      \"note\": \"Bánh phở mềm, thịt tái\",\n      \"modifierIds\": []\n    }\n  ]\n}"
+            },
+            "url": "{{baseUrl}}/orders"
+          }
+        },
+        {
+          "name": "[400 Lỗi] Đổi bàn sang bàn đang bận hoặc trùng bàn (POST /tables/transfer)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{jwtToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fromTableId\": \"tbl-1\",\n  \"toTableId\": \"tbl-1\"\n}"
+            },
+            "url": "{{baseUrl}}/tables/transfer"
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Invoices & Inventory (Hóa đơn & Tồn kho)",
+      "item": [
+        {
+          "name": "[200 OK] Lập phiếu tạm tính Bàn 1 (POST /invoices/provisional)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{jwtToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tableId\": \"tbl-1\",\n  \"discountPercent\": 10\n}"
+            },
+            "url": "{{baseUrl}}/invoices/provisional"
+          }
+        },
+        {
+          "name": "[200 OK] Xem tồn kho cảnh báo sắp hết (GET /inventory)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwtToken}}" }
+            ],
+            "url": "{{baseUrl}}/inventory?branchId=branch-1&filter=LOW_STOCK"
+          }
+        }
+      ]
+    }
+  ]
+}

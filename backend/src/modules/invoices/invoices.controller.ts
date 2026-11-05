@@ -7,6 +7,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PaymentStatus, Role } from '@prisma/client';
 import { InvoicesService } from './invoices.service';
 import { CreateProvisionalInvoiceDto } from './dto/create-provisional-invoice.dto';
@@ -17,12 +18,15 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthUser } from '../../common/interfaces/auth.interface';
 
+@ApiTags('5. Invoices (Hóa đơn & Thanh toán VietQR)')
+@ApiBearerAuth('JWT-auth')
 @Controller('invoices')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}
 
   /** In hoặc Xem trước phiếu tạm tính (Provisional Bill) */
+  @ApiOperation({ summary: 'Lập phiếu tạm tính (Provisional Bill) kèm chiết khấu & VAT' })
   @Post('provisional')
   @Roles(Role.ADMIN, Role.MANAGER, Role.CASHIER, Role.WAITER)
   createProvisional(
@@ -33,6 +37,7 @@ export class InvoicesController {
   }
 
   /** Chốt hóa đơn thanh toán và giải phóng bàn */
+  @ApiOperation({ summary: 'Chốt thanh toán hóa đơn (VietQR/Tiền mặt) & Giải phóng bàn về trống' })
   @Post('settle')
   @Roles(Role.ADMIN, Role.MANAGER, Role.CASHIER)
   settleInvoice(
@@ -43,6 +48,7 @@ export class InvoicesController {
   }
 
   /** Danh sách hóa đơn */
+  @ApiOperation({ summary: 'Danh sách lịch sử hóa đơn theo chi nhánh' })
   @Get()
   @Roles(Role.ADMIN, Role.MANAGER, Role.CASHIER)
   getInvoices(
@@ -58,10 +64,10 @@ export class InvoicesController {
   }
 
   /** Chi tiết 1 hóa đơn */
+  @ApiOperation({ summary: 'Xem chi tiết 1 hóa đơn' })
   @Get(':id')
   @Roles(Role.ADMIN, Role.MANAGER, Role.CASHIER)
   getInvoiceById(@Param('id') id: string) {
     return this.invoicesService.getInvoiceById(id);
   }
 }
-

@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import { Public } from '../../common/decorators/public.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -9,6 +10,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { IssueQrDto } from './dto/issue-qr.dto';
 import { TableTokenService } from './table-token.service';
 
+@ApiTags('2. Tables (Quản lý Sơ đồ Bàn)')
 @Controller()
 export class TableSecurityController {
   constructor(
@@ -20,6 +22,8 @@ export class TableSecurityController {
    * POST /api/tables/:tableId/qr
    * Nhân viên lấy URL QR để in / hiển thị. Body { rotate: true } để thu hồi QR cũ.
    */
+  @ApiOperation({ summary: 'Cấp phát / Xoay vòng mã QR bảo mật cho bàn ăn' })
+  @ApiBearerAuth('JWT-auth')
   @Post('tables/:tableId/qr')
   @Roles(Role.MANAGER, Role.CASHIER)
   issueQr(@Param('tableId') tableId: string, @Body() dto: IssueQrDto, @CurrentUser() user: AuthUser) {
@@ -30,6 +34,8 @@ export class TableSecurityController {
    * GET /api/table-access/me   (header x-table-token hoặc ?t=)
    * Trang /table/[id] gọi khi khách vừa quét QR để kiểm tra mã và lấy thông tin bàn.
    */
+  @ApiOperation({ summary: 'Khách quét QR xác thực định danh bàn ăn (200 OK / 401 Mã giả mạo)' })
+  @ApiSecurity('Table-Token')
   @Public()
   @UseGuards(TableGuestGuard)
   @Get('table-access/me')

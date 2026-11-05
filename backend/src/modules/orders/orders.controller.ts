@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   Param,
   Patch,
   Post,
@@ -10,6 +9,7 @@ import {
   Req,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiHeader, ApiOperation, ApiQuery, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { OrderItemStatus, Role } from '@prisma/client';
 import type { Request } from 'express';
 import { JwtService } from '@nestjs/jwt';
@@ -22,6 +22,7 @@ import { OrdersService } from './orders.service';
 import { PlaceOrderDto } from './dto/place-order.dto';
 import { UpdateOrderItemStatusDto } from './dto/update-order-item-status.dto';
 
+@ApiTags('4. Orders & KDS (Đặt món & Điều phối Bếp)')
 @Controller()
 export class OrdersController {
   constructor(
@@ -34,15 +35,20 @@ export class OrdersController {
    * Đặt món linh hoạt: Phục vụ cả Khách tại bàn (Mã QR) lẫn Thu ngân POS (Tài khoản nhân viên)
    * POST /api/orders
    */
+  @ApiOperation({ summary: 'Đặt món mới tại bàn (QR Token) hoặc tại quầy POS (JWT) -> 201 Created' })
+  @ApiBearerAuth('JWT-auth')
+  @ApiSecurity('Table-Token')
+  @ApiHeader({ name: 'x-table-token', required: false, description: '(Tùy chọn) Mã QR bàn nếu khách tự đặt' })
+  @ApiQuery({ name: 't', required: false, description: '(Tùy chọn) Mã QR bàn qua query nếu khách tự đặt' })
   @Public()
   @Post('orders')
   async placeOrder(
     @Body() dto: PlaceOrderDto,
-    @Headers('x-table-token') tableTokenHeader?: string,
-    @Query('t') tableTokenQuery?: string,
-    @Headers('authorization') authHeader?: string,
-    @Req() req?: Request,
+    @Req() req: Request,
   ) {
+    const tableTokenHeader = req.headers['x-table-token'] as string | undefined;
+    const tableTokenQuery = req.query['t'] as string | undefined;
+    const authHeader = req.headers['authorization'] as string | undefined;
     const rawQrToken = tableTokenHeader || tableTokenQuery;
 
     // 1. Trường hợp Khách quét QR gọi món tại bàn
@@ -72,11 +78,6 @@ export class OrdersController {
       }
     }
 
-    // 3. Trường hợp Khách gọi món theo bàn (Mã QR tĩnh trên bàn hoặc chế độ linh hoạt LAN/Local)
-    if (dto.tableId) {
-      return this.ordersService.placeOrder(dto, dto.tableId, { isGuest: true });
-    }
-
     throw new UnauthorizedException(
       'Vui lòng quét mã QR tại bàn hoặc đăng nhập tài khoản nhân viên để gọi món',
     );
@@ -86,6 +87,8 @@ export class OrdersController {
    * Bếp KDS cập nhật trạng thái món (Pending -> Cooking -> Ready -> Served -> Cancelled)
    * PATCH /api/orders/items/:id/status
    */
+  @ApiOperation({ summary: 'Đầu bếp KDS cập nhật trạng thái món & Tự động trừ kho BOM (200 OK / 400 Hết hàng)' })
+  @ApiBearerAuth('JWT-auth')
   @Patch('orders/items/:id/status')
   @Roles(Role.ADMIN, Role.MANAGER, Role.COOK, Role.CASHIER)
   updateOrderItemStatus(
@@ -97,25 +100,16 @@ export class OrdersController {
   }
 
   /**
-   * Bếp KDS hoàn tất toàn bộ vé order (Batch Complete)
-   * PATCH /api/orders/:id/complete-all
-   */
-  @Patch('orders/:id/complete-all')
-  @Roles(Role.ADMIN, Role.MANAGER, Role.COOK, Role.CASHIER)
-  completeOrderTicket(
-    @Param('id') id: string,
-    @Query('stationId') stationId: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.ordersService.completeOrderTicket(id, stationId, user);
-  }
-
-  /**
    * Lấy danh sách các món cần chế biến trên màn hình Bếp KDS
    * GET /api/orders/kds?branchId=...&stationId=...
    */
+  @ApiOperation({ summary: 'Lấy danh sách vé món trên màn hình Bếp KDS theo trạm' })
+  @ApiBearerAuth('JWT-auth')
   @Get('orders/kds')
   @Roles(Role.ADMIN, Role.MANAGER, Role.COOK, Role.CASHIER)
+  @ApiQuery({ name: 'branchId', required: false, example: 'branch-1' })
+  @ApiQuery({ name: 'stationId', required: false, example: 'hot' })
+  @ApiQuery({ name: 'status', required: false, enum: OrderItemStatus })
   getKdsItems(
     @CurrentUser() user: AuthUser,
     @Query('branchId') branchId?: string,
@@ -134,6 +128,7 @@ export class OrdersController {
    * Xem toàn bộ món ăn và tiến độ trong phiên hiện tại của bàn
    * GET /api/orders/table/:tableId/current
    */
+  @ApiOperation({ summary: 'Xem tiến độ các món trong phiên ăn hiện tại của bàn' })
   @Public()
   @Get('orders/table/:tableId/current')
   getCurrentSession(@Param('tableId') tableId: string) {
@@ -144,6 +139,7 @@ export class OrdersController {
    * Khách tại bàn hoặc Thu ngân bấm Gọi thanh toán
    * POST /api/tables/:id/request-payment
    */
+  @ApiOperation({ summary: 'Khách tại bàn bấm Gọi thanh toán phát chuông về POS' })
   @Public()
   @Post('tables/:id/request-payment')
   requestPayment(@Param('id') id: string) {
