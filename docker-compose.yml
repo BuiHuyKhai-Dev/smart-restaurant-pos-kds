@@ -14,12 +14,13 @@ services:
       - "4000:4000"
     environment:
       - PORT=4000
-      - DATABASE_URL=postgresql://postgres.avsrdsjxgxutdedapwmx:Sharktank321123@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres
+      - DATABASE_URL=postgresql://postgres.avsrdsjxgxutdedapwmx:Sharktank321123@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres?pgbouncer=true
       - DIRECT_URL=postgresql://postgres.avsrdsjxgxutdedapwmx:Sharktank321123@aws-0-ap-northeast-2.pooler.supabase.com:5432/postgres
       - JWT_SECRET=smart_restaurant_jwt_super_secret_key_2026
-      - JWT_EXPIRES_IN=7d
-      - TABLE_TOKEN_SECRET=smart_restaurant_table_hmac_token_secret_key_2026
-      - CORS_ORIGIN=*
+      - JWT_EXPIRES_IN=12h
+      - TABLE_QR_SECRET=smart_restaurant_table_hmac_token_secret_key_2026
+      - CORS_ORIGIN=http://localhost:3000
+      - FRONTEND_URL=http://localhost:3000
     command: >
       sh -c "npx prisma db push --skip-generate &&
              npm run start:prod"
